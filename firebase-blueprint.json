@@ -1,0 +1,40 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["email"]
+    },
+    "UserAppData": {
+      "title": "UserAppData",
+      "description": "Synced application data for the user",
+      "type": "object",
+      "properties": {
+        "thikrItems": { "type": "string" },
+        "thikrProgress": { "type": "string" },
+        "customHabits": { "type": "string" },
+        "customHabitProgress": { "type": "string" },
+        "quranDailyReading": { "type": "string" },
+        "quranSurahState": { "type": "string" },
+        "dailyQuranSelection": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile document"
+    },
+    "/users/{userId}/appData/main": {
+      "schema": "UserAppData",
+      "description": "User serialized app data"
+    }
+  }
+}

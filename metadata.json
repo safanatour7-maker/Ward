@@ -1,0 +1,8 @@
+{
+  "name": "Remix Werd: Your Daily Devotion",
+  "description": "تطبيق وَرْد لمتابعة الورد القرآني وورد الأذكار والأخلاق بأسلوب هادئ ومحفّز.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

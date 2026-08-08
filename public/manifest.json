@@ -1,0 +1,17 @@
+{
+  "name": "ورد — أورادك اليومية",
+  "short_name": "ورد",
+  "description": "تطبيق وَرْد لمتابعة الورد القرآني وورد الأذكار والأخلاق بأسلوب هادئ ومحفّز.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#efe6ff",
+  "theme-color": "#efe6ff",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    }
+  ]
+}
