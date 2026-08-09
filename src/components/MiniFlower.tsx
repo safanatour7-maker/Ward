@@ -45,8 +45,8 @@ export function MiniFlower({
       border: "#ea580c",
     },
     lavender: {
-      active: "#a855f7", // lavender purple
-      bg: "rgba(168, 85, 247, 0.15)",
+      active: "#a855f7", // rich lavender purple
+      bg: "rgba(168, 85, 247, 0.18)",
       border: "#7e22ce",
     },
   };

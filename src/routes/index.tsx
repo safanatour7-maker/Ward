@@ -141,15 +141,14 @@ export function Home() {
   const [secretClickCount, setSecretClickCount] = useState(0);
 
   const handleSecretLogoClick = () => {
-    setSecretClickCount((prev) => {
-      const next = prev + 1;
-      if (next >= 3) {
-        navigate({ to: "/admin" });
-        return 0;
-      }
-      return next;
-    });
-    setTimeout(() => setSecretClickCount(0), 1500);
+    const next = secretClickCount + 1;
+    if (next >= 3) {
+      setSecretClickCount(0);
+      navigate({ to: "/admin" });
+    } else {
+      setSecretClickCount(next);
+      setTimeout(() => setSecretClickCount(0), 1500);
+    }
   };
 
   // Auto-prompt login modal on launch if user is not signed in

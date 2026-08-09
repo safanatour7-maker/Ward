@@ -82,7 +82,7 @@ export async function createGlobalHabit(input: {
   target_count: number;
   duration_type: DurationType;
   duration_days: number;
-  flower_type?: "tulip" | "jasmine" | "jouri" | "violet" | "daffodil";
+  flower_type?: "tulip" | "jasmine" | "jouri" | "violet" | "daffodil" | "lavender";
   start_date?: string;
 }): Promise<void> {
   const cleanName = input.name.trim();
@@ -122,7 +122,7 @@ export async function updateGlobalHabit(
     description?: string;
     duration_type: DurationType;
     duration_days: number;
-    flower_type?: "tulip" | "jasmine" | "jouri" | "violet" | "daffodil";
+    flower_type?: "tulip" | "jasmine" | "jouri" | "violet" | "daffodil" | "lavender";
   }
 ): Promise<void> {
   const cleanName = input.name.trim();
@@ -180,7 +180,7 @@ export async function createHabit(input: {
   target_count: number;
   duration_type: DurationType;
   duration_days: number;
-  flower_type?: "tulip" | "jasmine" | "jouri" | "violet" | "daffodil";
+  flower_type?: "tulip" | "jasmine" | "jouri" | "violet" | "daffodil" | "lavender";
   start_date?: string;
 }): Promise<number> {
   const cleanName = input.name.trim();

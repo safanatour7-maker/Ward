@@ -497,6 +497,14 @@ function HabitFlower({
       leafActive: "#10b981",
       leafInactive: "rgba(16, 185, 129, 0.1)",
     },
+    lavender: {
+      active: "#a855f7",
+      inactive: "rgba(168, 85, 247, 0.08)",
+      borderActive: "#7e22ce",
+      borderInactive: "rgba(168, 85, 247, 0.22)",
+      leafActive: "#10b981",
+      leafInactive: "rgba(16, 185, 129, 0.1)",
+    },
   };
 
   const theme = colors[fType] || colors.tulip;
@@ -709,6 +717,25 @@ function HabitFlower({
           />
         </g>
       )}
+
+      {fType === "lavender" && (
+        <g>
+          {/* Stem & Base (idx 0) */}
+          {renderPart(0, "M 58 40 L 58 108 L 62 108 L 62 40 Z", { isLeaf: true })}
+          {/* Left Leaf (idx 1) */}
+          {renderPart(1, "M 60 92 C 40 92, 28 78, 32 60 C 44 72, 55 82, 60 92 Z", { isLeaf: true })}
+          {/* Right Leaf (idx 2) */}
+          {renderPart(2, "M 60 95 C 80 95, 92 81, 88 63 C 76 75, 65 85, 60 95 Z", { isLeaf: true })}
+          {/* Lower floret pair (idx 3) */}
+          {renderPart(3, "M 60 68 C 36 66, 34 50, 48 44 C 55 52, 58 62, 60 68 Z M 60 68 C 84 66, 86 50, 72 44 C 65 52, 62 62, 60 68 Z")}
+          {/* Mid floret pair (idx 4) */}
+          {renderPart(4, "M 60 52 C 38 50, 36 34, 50 28 C 56 36, 58 44, 60 52 Z M 60 52 C 82 50, 84 34, 70 28 C 64 36, 62 44, 60 52 Z")}
+          {/* Upper floret pair (idx 5) */}
+          {renderPart(5, "M 60 36 C 42 34, 40 20, 52 14 C 56 22, 58 28, 60 36 Z M 60 36 C 78 34, 80 20, 68 14 C 64 22, 62 28, 60 36 Z")}
+          {/* Top lavender crown (idx 6) */}
+          {renderPart(6, "M 60 22 C 48 18, 52 4, 60 2 C 68 4, 72 18, 60 22 Z")}
+        </g>
+      )}
     </svg>
   );
 }
@@ -737,7 +764,7 @@ function AddEditHabitModal({
     (habit?.duration_type as any) ?? "week"
   );
   const [durationDays, setDurationDays] = useState(habit?.duration_days ?? 7);
-  const [flowerType, setFlowerType] = useState<"tulip" | "jasmine" | "jouri" | "violet" | "daffodil">(
+  const [flowerType, setFlowerType] = useState<"tulip" | "jasmine" | "jouri" | "violet" | "daffodil" | "lavender">(
     habit?.flower_type ?? "tulip"
   );
   const [isGlobal, setIsGlobal] = useState(false);

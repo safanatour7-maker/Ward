@@ -63,7 +63,9 @@ export function weekDays(d: Date = new Date()): string[] {
   });
 }
 
-export function formatArabicDate(d: Date = new Date()): string {
+export function formatArabicDate(input: Date | string = new Date()): string {
+  const d = typeof input === "string" ? new Date(input) : input;
+  if (isNaN(d.getTime())) return typeof input === "string" ? input : "";
   const wd = AR_WEEKDAYS[d.getDay()];
   const m = AR_MONTHS[d.getMonth()];
   return `${wd}، ${d.getDate()} ${m}`;

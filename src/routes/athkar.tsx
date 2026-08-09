@@ -706,6 +706,17 @@ function GroupBlock({
                         <Edit2 className="h-4.5 w-4.5" />
                         <span className="text-[9px] font-semibold leading-none">تعديل</span>
                       </button>
+
+                      {/* Delete Button */}
+                      <button
+                        onClick={() => onDeleteItem(it.id!)}
+                        aria-label="حذف الذكر"
+                        className="rounded-2xl border border-rose-200/80 bg-rose-50/70 px-2.5 text-rose-600 hover:bg-rose-100 active:scale-95 transition-all flex flex-col items-center justify-center gap-0.5 cursor-pointer"
+                        title="حذف الذكر"
+                      >
+                        <Trash2 className="h-4.5 w-4.5" />
+                        <span className="text-[9px] font-semibold leading-none">حذف</span>
+                      </button>
                     </div>
                   </li>
                 );

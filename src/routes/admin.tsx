@@ -7,7 +7,7 @@ import { createGlobalHabit, updateGlobalHabit, deleteGlobalHabit } from "@/lib/h
 import { createGlobalThikr, updateGlobalThikr, deleteGlobalThikr } from "@/lib/athkar";
 import { isoDate, formatArabicDate, arabicMonthYear } from "@/lib/date-utils";
 import { totalPagesFor, surahName } from "@/lib/quran-text";
-import { ShieldCheck, Users, Download, Plus, Sparkles, Lock, ArrowRight, CheckCircle2, Clock, BookOpen, CircleDot, Award, Calendar, RefreshCw, Edit2, Trash2 } from "lucide-react";
+import { ShieldCheck, Users, Download, Plus, Sparkles, Lock, ArrowRight, CheckCircle2, Clock, BookOpen, CircleDot, Award, Calendar, RefreshCw, Edit2, Trash2, ChevronDown, ChevronUp, Eye, EyeOff, Trophy, Filter } from "lucide-react";
 
 export const Route = createFileRoute("/admin")({
   component: AdminPage,
@@ -195,6 +195,319 @@ async function loadSingleMemberCloudData(m: UserProfileDoc): Promise<UserCloudDa
   return null;
 }
 
+function getMemberStatsForDate(uData?: UserCloudData, targetDate?: string) {
+  if (!uData) return { quranPct: 0, athkarPct: 0, prayerPct: 0, habitsPct: 0, totalAvg: 0 };
+  if (!targetDate) {
+    const s = getMemberStats(uData);
+    const totalAvg = Math.round((s.quranPct + s.athkarPct + s.prayerPct + s.habitsPct) / 4);
+    return { ...s, totalAvg };
+  }
+
+  // 1. Quran % on targetDate
+  let quranPct = 0;
+  if (uData.quranDailyReading && Array.isArray(uData.quranDailyReading)) {
+    const r = uData.quranDailyReading.find((x: any) => x.date === targetDate);
+    if (r) {
+      quranPct = r.completed || (r.pages_read || 0) > 0 ? 100 : 0;
+    }
+  }
+
+  // 2. Athkar % on targetDate
+  let athkarPct = 0;
+  const thikrItems = uData.thikrItems && Array.isArray(uData.thikrItems) ? uData.thikrItems : [];
+  if (thikrItems.length > 0) {
+    let sumThikrPct = 0;
+    let counted = 0;
+    thikrItems.forEach((item: any) => {
+      const target = item.target_count || 1;
+      let curr = 0;
+      let isDone = false;
+      if (uData.thikrProgress && Array.isArray(uData.thikrProgress)) {
+        const prog = uData.thikrProgress.find((tp: any) => tp.thikr_item_id === item.id && tp.date === targetDate);
+        if (prog) {
+          curr = prog.current_count || 0;
+          isDone = prog.completed || false;
+          if (curr > 0 || isDone) counted++;
+        }
+      }
+      if (isDone || curr > 0) {
+        const pct = isDone || curr >= target ? 100 : Math.min(100, Math.round((curr / target) * 100));
+        sumThikrPct += pct;
+      }
+    });
+    if (counted > 0) {
+      athkarPct = Math.round(sumThikrPct / thikrItems.length);
+    }
+  }
+
+  // 3. Prayer % on targetDate
+  let prayerPct = 0;
+  if (uData.prayerLogs && Array.isArray(uData.prayerLogs)) {
+    const pl = uData.prayerLogs.find((p: any) => p.date === targetDate);
+    if (pl) {
+      let checked = 0;
+      ["fajr", "dhuhr", "asr", "maghrib", "isha"].forEach((k) => {
+        if (pl[k]) checked++;
+      });
+      prayerPct = Math.round((checked / 5) * 100);
+    }
+  }
+
+  // 4. Habits % on targetDate
+  let habitsPct = 0;
+  const customHabits = uData.customHabits && Array.isArray(uData.customHabits) ? uData.customHabits : [];
+  if (customHabits.length > 0) {
+    let sumHabitPct = 0;
+    let counted = 0;
+    customHabits.forEach((h: any) => {
+      let isDone = false;
+      if (uData.customHabitProgress && Array.isArray(uData.customHabitProgress)) {
+        const hp = uData.customHabitProgress.find((p: any) => p.habit_id === h.id && p.date === targetDate);
+        if (hp && (hp.completed || (hp.count || 0) > 0)) {
+          isDone = true;
+          counted++;
+        }
+      }
+      sumHabitPct += isDone ? 100 : 0;
+    });
+    if (counted > 0) {
+      habitsPct = Math.round(sumHabitPct / customHabits.length);
+    }
+  }
+
+  const totalAvg = Math.round((quranPct + athkarPct + prayerPct + habitsPct) / 4);
+  return { quranPct, athkarPct, prayerPct, habitsPct, totalAvg };
+}
+
+function hasMemberSubmittedOnDate(uData?: UserCloudData, targetDate?: string): boolean {
+  if (!uData || !targetDate) return false;
+  if (uData.prayerLogs && uData.prayerLogs.some((p: any) => p.date === targetDate)) return true;
+  if (uData.thikrProgress && uData.thikrProgress.some((t: any) => t.date === targetDate && ((t.current_count || 0) > 0 || t.completed))) return true;
+  if (uData.customHabitProgress && uData.customHabitProgress.some((h: any) => h.date === targetDate && ((h.count || 0) > 0 || h.completed))) return true;
+  if (uData.quranDailyReading && uData.quranDailyReading.some((q: any) => q.date === targetDate && ((q.pages_read || 0) > 0 || q.completed))) return true;
+
+  const stats = getMemberStatsForDate(uData, targetDate);
+  return stats.totalAvg > 0 || stats.quranPct > 0 || stats.athkarPct > 0 || stats.prayerPct > 0 || stats.habitsPct > 0;
+}
+
+function getUniqueSubmissionDates(
+  members: UserProfileDoc[],
+  userDataMap: Record<string, UserCloudData>,
+  ascending: boolean = true
+): string[] {
+  const dates = new Set<string>();
+  dates.add(isoDate());
+
+  members.forEach((m) => {
+    const uData = getUserDataForMember(m, userDataMap);
+    if (!uData) return;
+    if (uData.prayerLogs && Array.isArray(uData.prayerLogs)) {
+      uData.prayerLogs.forEach((p: any) => p.date && dates.add(p.date));
+    }
+    if (uData.thikrProgress && Array.isArray(uData.thikrProgress)) {
+      uData.thikrProgress.forEach((t: any) => t.date && dates.add(t.date));
+    }
+    if (uData.customHabitProgress && Array.isArray(uData.customHabitProgress)) {
+      uData.customHabitProgress.forEach((h: any) => h.date && dates.add(h.date));
+    }
+    if (uData.quranDailyReading && Array.isArray(uData.quranDailyReading)) {
+      uData.quranDailyReading.forEach((q: any) => q.date && dates.add(q.date));
+    }
+  });
+
+  const array = Array.from(dates);
+  array.sort((a, b) => (ascending ? a.localeCompare(b) : b.localeCompare(a)));
+  return array;
+}
+
+function MemberDetailView({ member, uData }: { member: UserProfileDoc; uData?: UserCloudData }) {
+  if (!uData) {
+    return (
+      <div className="p-4 bg-slate-50 rounded-2xl text-center text-xs text-slate-500 font-medium my-2">
+        لم يقم هذا العضو برفع سجلاته للسحابة بعد.
+      </div>
+    );
+  }
+
+  const s = getMemberStats(uData);
+
+  // 1. Quran
+  let selectedSurahIds: number[] = [];
+  if (uData?.dailyQuranSelection && Array.isArray(uData.dailyQuranSelection) && uData.dailyQuranSelection.length > 0) {
+    const sorted = [...uData.dailyQuranSelection].reverse();
+    for (const sel of sorted) {
+      if (sel.surah_ids && Array.isArray(sel.surah_ids) && sel.surah_ids.length > 0) {
+        selectedSurahIds = sel.surah_ids;
+        break;
+      }
+    }
+  }
+  if (selectedSurahIds.length === 0 && uData?.quranSurahState && Array.isArray(uData.quranSurahState)) {
+    selectedSurahIds = uData.quranSurahState.map((s: any) => s.surah_id).filter(Boolean);
+  }
+
+  // 2. Athkar
+  const thikrItemList = uData?.thikrItems || [];
+
+  // 3. Prayer
+  const prayerLogs = uData?.prayerLogs || [];
+
+  // 4. Habits
+  const customHabits = uData?.customHabits || [];
+
+  return (
+    <div className="space-y-3 p-4 bg-amber-50/50 rounded-2xl border border-amber-300 my-2 text-right dir-rtl animate-in fade-in duration-150 shadow-sm">
+      <div className="flex items-center justify-between pb-2 border-b border-amber-200/80">
+        <span className="text-xs font-black text-amber-900 flex items-center gap-1">
+          📜 تفاصيل تعبئة العضو: {member.displayName}
+        </span>
+        <span className="text-[10px] text-slate-500 font-medium dir-ltr">{member.email}</span>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-[10px]">
+        <div className="bg-white p-2 rounded-xl border border-amber-200 shadow-2xs">
+          <span className="text-amber-800 font-bold block">القرآن الكريم</span>
+          <span className="font-black text-amber-700 text-xs tabular-nums">{s.quranPct}%</span>
+        </div>
+        <div className="bg-white p-2 rounded-xl border border-indigo-200 shadow-2xs">
+          <span className="text-indigo-800 font-bold block">الأذكار اليومية</span>
+          <span className="font-black text-indigo-700 text-xs tabular-nums">{s.athkarPct}%</span>
+        </div>
+        <div className="bg-white p-2 rounded-xl border border-emerald-200 shadow-2xs">
+          <span className="text-emerald-800 font-bold block">التزام الصلاة</span>
+          <span className="font-black text-emerald-700 text-xs tabular-nums">{s.prayerPct}%</span>
+        </div>
+        <div className="bg-white p-2 rounded-xl border border-purple-200 shadow-2xs">
+          <span className="text-purple-800 font-bold block">الأخلاق والسنن</span>
+          <span className="font-black text-purple-700 text-xs tabular-nums">{s.habitsPct}%</span>
+        </div>
+      </div>
+
+      {/* Quran Details */}
+      <div className="p-3 bg-white rounded-xl border border-amber-200/80">
+        <h4 className="text-xs font-black text-amber-900 mb-2 flex items-center gap-1">
+          <BookOpen className="h-3.5 w-3.5 text-amber-700" /> ورد القرآن
+        </h4>
+        {selectedSurahIds.length === 0 ? (
+          <p className="text-[10px] text-slate-500">لم يحدد سور بورد القرآن بعد.</p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+            {selectedSurahIds.map((sId) => {
+              const state = uData?.quranSurahState?.find((qs: any) => qs.surah_id === sId);
+              const name = surahName(sId);
+              const totalPages = totalPagesFor(sId);
+              const reached = state?.max_page_reached || state?.current_page || 0;
+              const pct = state?.is_completed || state?.percent_complete === 100
+                ? 100
+                : Math.min(100, Math.round((reached / totalPages) * 100));
+              return (
+                <div key={sId} className="p-2 bg-amber-50/50 rounded-lg border border-amber-100 flex items-center justify-between text-[11px]">
+                  <span className="font-bold text-slate-800">{name} ({reached}/{totalPages} ص)</span>
+                  <span className={`px-2 py-0.5 rounded text-[9px] font-black ${pct === 100 ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>
+                    {pct}%
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Athkar Details */}
+      <div className="p-3 bg-white rounded-xl border border-indigo-200/80">
+        <h4 className="text-xs font-black text-indigo-900 mb-2 flex items-center gap-1">
+          <Sparkles className="h-3.5 w-3.5 text-indigo-700" /> ورد الأذكار
+        </h4>
+        {thikrItemList.length === 0 ? (
+          <p className="text-[10px] text-slate-500">لم يضف أذكار بعد.</p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+            {thikrItemList.map((item: any) => {
+              const target = item.target_count || 1;
+              let curr = item.completed_count || 0;
+              let isDone = item.completed || false;
+              if (uData?.thikrProgress && Array.isArray(uData.thikrProgress)) {
+                const prog = uData.thikrProgress.find((tp: any) => tp.thikr_item_id === item.id);
+                if (prog) {
+                  if (prog.current_count !== undefined) curr = prog.current_count;
+                  if (prog.completed !== undefined) isDone = prog.completed;
+                }
+              }
+              const pct = isDone || curr >= target ? 100 : Math.min(100, Math.round((curr / target) * 100));
+              const name = item.text || item.name || "ذِكر";
+              return (
+                <div key={item.id || name} className="p-2 bg-indigo-50/50 rounded-lg border border-indigo-100 flex items-center justify-between text-[11px]">
+                  <span className="font-bold text-slate-800 truncate">{name} ({curr}/{target})</span>
+                  <span className={`px-2 py-0.5 rounded text-[9px] font-black ${pct === 100 ? "bg-emerald-100 text-emerald-800" : "bg-indigo-100 text-indigo-800"}`}>
+                    {pct}%
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Prayer Logs */}
+      <div className="p-3 bg-white rounded-xl border border-emerald-200/80">
+        <h4 className="text-xs font-black text-emerald-900 mb-2 flex items-center gap-1">
+          <Clock className="h-3.5 w-3.5 text-emerald-700" /> التزام الصلاة
+        </h4>
+        {prayerLogs.length > 0 ? (
+          <div className="space-y-1 text-[10px]">
+            {prayerLogs.slice(-5).reverse().map((pl: any, i: number) => {
+              const checked = ["fajr", "dhuhr", "asr", "maghrib", "isha"].filter((k) => pl[k]).length;
+              return (
+                <div key={i} className="flex items-center justify-between p-1.5 bg-emerald-50/40 rounded-lg border border-emerald-100">
+                  <span className="font-bold text-slate-700">{pl.date}</span>
+                  <div className="flex gap-1.5 font-bold">
+                    <span className={pl.fajr ? "text-emerald-700" : "text-slate-300"}>فجر</span>
+                    <span className={pl.dhuhr ? "text-emerald-700" : "text-slate-300"}>ظهر</span>
+                    <span className={pl.asr ? "text-emerald-700" : "text-slate-300"}>عصر</span>
+                    <span className={pl.maghrib ? "text-emerald-700" : "text-slate-300"}>مغرب</span>
+                    <span className={pl.isha ? "text-emerald-700" : "text-slate-300"}>عشاء</span>
+                  </div>
+                  <span className="font-black text-emerald-800">{checked}/5</span>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-[10px] text-slate-500">لا توجد سجلات صلاة مسجلة بعد.</p>
+        )}
+      </div>
+
+      {/* Habits */}
+      <div className="p-3 bg-white rounded-xl border border-purple-200/80">
+        <h4 className="text-xs font-black text-purple-900 mb-2 flex items-center gap-1">
+          <Award className="h-3.5 w-3.5 text-purple-700" /> الأخلاق والسنن
+        </h4>
+        {customHabits.length > 0 ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+            {customHabits.map((h: any) => {
+              let isDone = false;
+              if (uData?.customHabitProgress && Array.isArray(uData.customHabitProgress)) {
+                const hp = uData.customHabitProgress.find((p: any) => p.habit_id === h.id);
+                if (hp && (hp.completed || (hp.count || 0) > 0)) isDone = true;
+              }
+              return (
+                <div key={h.id || h.name} className="p-2 bg-purple-50/50 rounded-lg border border-purple-100 flex items-center justify-between text-[11px]">
+                  <span className="font-bold text-slate-800">{h.name}</span>
+                  <span className={`px-2 py-0.5 rounded text-[9px] font-black ${isDone ? "bg-emerald-100 text-emerald-800" : "bg-purple-100 text-purple-800"}`}>
+                    {isDone ? "مكتمل ✓" : "0%"}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-[10px] text-slate-500">لا توجد أخصال مسجلة بعد.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AdminPage() {
   const { currentUser, toggleAdminRole } = useAuth();
   const navigate = useNavigate();
@@ -246,6 +559,17 @@ function AdminPage() {
 
   // Selected Date for Excel export / viewing
   const [exportDate, setExportDate] = useState(isoDate());
+
+  // Collapsible & View Control UI state
+  const [showHabitForm, setShowHabitForm] = useState(false);
+  const [showThikrForm, setShowThikrForm] = useState(false);
+  const [collapsedDays, setCollapsedDays] = useState<Record<string, boolean>>({});
+  const [expandedMemberKey, setExpandedMemberKey] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<"byDate" | "byMember">("byDate");
+  const [onlySubmitted, setOnlySubmitted] = useState<boolean>(false);
+  const [dateSortAsc, setDateSortAsc] = useState<boolean>(true);
+  const [showLeaderboard, setShowLeaderboard] = useState<boolean>(false);
+  const [selectedLeaderboardMember, setSelectedLeaderboardMember] = useState<UserProfileDoc | null>(null);
 
   // Load all users & cloud data & global items from Firestore in real-time
   useEffect(() => {
@@ -485,42 +809,94 @@ function AdminPage() {
     }
   };
 
-  // Generate & Download Excel / CSV File
+  // Generate & Download Detailed Excel / CSV File with distinct columns
   const exportToExcel = async () => {
-    // 1. Fetch cloud data for all members
-    const rows: string[][] = [
-      ["اسم العضو", "البريد الإلكتروني", "تاريخ الانضمام", "ورد القرآن الكريم (%)", "ورد الأذكار (%)", "نسبة التزام الصلاة (%)", "الأخلاق والسنن (%)"],
-    ];
+    const uniqueDates = getUniqueSubmissionDates(members, userDataMap, true);
 
-    for (const member of members) {
-      let data = userDataMap[member.uid];
-      if (!data) {
-        try {
-          const snap = await getDoc(doc(dbFirestore, "user_data", member.uid));
-          if (snap.exists()) data = snap.data() as UserCloudData;
-        } catch (e) {}
-      }
+    let tableRowsHtml = "";
 
-      const stats = getMemberStats(data);
+    uniqueDates.forEach((d) => {
+      const dateObj = new Date(d);
+      const dayName = isNaN(dateObj.getTime()) ? d : formatArabicDate(dateObj);
 
-      rows.push([
-        member.displayName || "بدون اسم",
-        member.email || "—",
-        member.createdAt ? formatArabicDate(new Date(member.createdAt)) : "—",
-        `${stats.quranPct}%`,
-        `${stats.athkarPct}%`,
-        `${stats.prayerPct}%`,
-        `${stats.habitsPct}%`,
-      ]);
-    }
+      members.forEach((m) => {
+        const data = userDataMap[m.uid];
+        const isSubmitted = hasMemberSubmittedOnDate(data, d);
+        const stats = getMemberStatsForDate(data, d);
 
-    // Convert rows to UTF-8 CSV with BOM for perfect Arabic display in Excel
-    const csvContent = "\uFEFF" + rows.map((r) => r.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(",")).join("\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+        tableRowsHtml += `
+          <tr style="${isSubmitted ? 'background-color: #f0fdf4;' : 'background-color: #ffffff;'}">
+            <td style="padding: 8px; border: 1px solid #cbd5e1; font-weight: bold; text-align: right;">${m.displayName || "بدون اسم"}</td>
+            <td style="padding: 8px; border: 1px solid #cbd5e1; text-align: left; dir: ltr;">${m.email || "—"}</td>
+            <td style="padding: 8px; border: 1px solid #cbd5e1; text-align: center;">${d}</td>
+            <td style="padding: 8px; border: 1px solid #cbd5e1; text-align: center;">${dayName}</td>
+            <td style="padding: 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #b45309;">${stats.quranPct}%</td>
+            <td style="padding: 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #3730a3;">${stats.athkarPct}%</td>
+            <td style="padding: 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #065f46;">${stats.prayerPct}%</td>
+            <td style="padding: 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #581c87;">${stats.habitsPct}%</td>
+            <td style="padding: 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; background-color: #f1f5f9;">${stats.totalAvg}%</td>
+            <td style="padding: 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; ${isSubmitted ? 'color: #15803d; background-color: #dcfce7;' : 'color: #94a3b8;'}">
+              ${isSubmitted ? "قام بالتعبئة ✓" : "لم يتم التعبئة"}
+            </td>
+          </tr>
+        `;
+      });
+    });
+
+    const excelHtml = `
+      <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+      <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+        <!--[if gte mso 9]>
+        <xml>
+          <x:ExcelWorkbook>
+            <x:ExcelWorksheets>
+              <x:ExcelWorksheet>
+                <x:Name>تقرير المتابعة</x:Name>
+                <x:WorksheetOptions>
+                  <x:DisplayRightToLeft/>
+                </x:WorksheetOptions>
+              </x:ExcelWorksheet>
+            </x:ExcelWorksheets>
+          </x:ExcelWorkbook>
+        </xml>
+        <![endif]-->
+        <style>
+          body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; }
+          table { border-collapse: collapse; width: 100%; direction: rtl; }
+          th { background-color: #0d9488; color: #ffffff; font-weight: bold; padding: 10px; border: 1px solid #0f766e; text-align: center; }
+        </style>
+      </head>
+      <body dir="rtl">
+        <h2 style="text-align: center; color: #0f766e; font-family: sans-serif;">تقرير متابعة الورد اليومي للأعضاء 📊</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>اسم العضو</th>
+              <th>البريد الإلكتروني</th>
+              <th>التاريخ</th>
+              <th>اليوم</th>
+              <th>ورد القرآن الكريم (%)</th>
+              <th>ورد الأذكار (%)</th>
+              <th>التزام الصلاة (%)</th>
+              <th>الأخلاق والسنن (%)</th>
+              <th>المعدل الإجمالي (%)</th>
+              <th>حالة التعبئة</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tableRowsHtml}
+          </tbody>
+        </table>
+      </body>
+      </html>
+    `;
+
+    const blob = new Blob(["\uFEFF" + excelHtml], { type: "application/vnd.ms-excel;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.setAttribute("download", `تقرير_متابعة_الأعضاء_${exportDate}.csv`);
+    link.setAttribute("download", `تقرير_متابعة_وردك_اليومي.xls`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -594,80 +970,108 @@ function AdminPage() {
         </div>
       </header>
 
-      {/* 1. Add Global Habit Section */}
-      <section className="mb-8 rounded-3xl border border-amber-300/80 bg-gradient-to-br from-amber-50/70 to-orange-50/40 p-5 shadow-sm backdrop-blur">
-        <div className="flex items-center gap-2 mb-2">
-          <Sparkles className="h-5 w-5 text-amber-600" />
-          <h2 className="text-base font-extrabold text-slate-900">إضافة خُلُق عام ونشره للجميع 🌐</h2>
+      {/* 1. Add Global Habit Section (Collapsible - Ultra Slim when closed) */}
+      <section className={`mb-3 rounded-2xl border transition-all ${
+        showHabitForm
+          ? "border-amber-300 bg-gradient-to-br from-amber-50/80 to-orange-50/40 p-4 shadow-xs"
+          : "border-amber-200/80 bg-amber-50/40 hover:bg-amber-100/60 p-2 px-3 shadow-2xs"
+      }`}>
+        <div
+          onClick={() => setShowHabitForm(!showHabitForm)}
+          className="flex items-center justify-between cursor-pointer select-none"
+        >
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-amber-600 shrink-0" />
+            <h2 className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+              <span>إضافة خُلُق عام ونشره للجميع 🌐</span>
+              {globalHabits.length > 0 && !showHabitForm && (
+                <span className="text-[10px] text-amber-900 font-bold bg-amber-100/80 px-1.5 py-0.2 rounded border border-amber-200">
+                  ({globalHabits.length} منشور)
+                </span>
+              )}
+            </h2>
+          </div>
+          <button
+            type="button"
+            className="px-2 py-0.5 rounded-md bg-amber-100 hover:bg-amber-200 text-amber-950 text-[11px] font-bold transition-all flex items-center gap-1 border border-amber-300/50"
+          >
+            <span>{showHabitForm ? "إخفاء ✖" : "+ إضافة خُلُق"}</span>
+            {showHabitForm ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+          </button>
         </div>
-        <p className="text-xs text-slate-600 font-medium mb-4">
-          يمكنك هنا إضافة خُلُق أو عمل صالح (مثل: إطعام طعام، صلة الرحم، غض البصر...). وتحديد مدته (هذا الأسبوع فقط، الشهر كامل، أو مدى الحياة).
-        </p>
 
-        <form onSubmit={handleAddGlobalHabit} className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div>
-            <label className="text-[11px] font-bold text-slate-700 block mb-1">اسم الخُلق أو العمل *</label>
-            <input
-              type="text"
-              placeholder="مثال: إطعام طعام / الكلمة الطيبة..."
-              value={habitName}
-              onChange={(e) => setHabitName(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-amber-500"
-              required
-            />
-          </div>
+        {showHabitForm && (
+          <div className="mt-4 pt-3 border-t border-amber-200/60 animate-in fade-in duration-150">
+            <p className="text-xs text-slate-600 font-medium mb-4">
+              يمكنك هنا إضافة خُلُق أو عمل صالح (مثل: إطعام طعام، صلة الرحم، غض البصر...). وتحديد مدته (هذا الأسبوع فقط، الشهر كامل، أو مدى الحياة).
+            </p>
 
-          <div>
-            <label className="text-[11px] font-bold text-slate-700 block mb-1">المدة المحددة ⏱️</label>
-            <select
-              value={habitDuration}
-              onChange={(e: any) => setHabitDuration(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-amber-500"
-            >
-              <option value="week">📅 هذا الأسبوع فقط (7 أيام)</option>
-              <option value="month">🗓️ الشهر كامل (30 يوماً)</option>
-              <option value="lifetime">♾️ مدى الحياة (مستمر دائماً)</option>
-            </select>
-          </div>
+            <form onSubmit={handleAddGlobalHabit} className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 block mb-1">اسم الخُلق أو العمل *</label>
+                <input
+                  type="text"
+                  placeholder="مثال: إطعام طعام / الكلمة الطيبة..."
+                  value={habitName}
+                  onChange={(e) => setHabitName(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-amber-500"
+                  required
+                />
+              </div>
 
-          <div>
-            <label className="text-[11px] font-bold text-slate-700 block mb-1">نوع زهرة الخُلق 🌸</label>
-            <select
-              value={flowerType}
-              onChange={(e: any) => setFlowerType(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-amber-500"
-            >
-              <option value="tulip">🌷 توليب</option>
-              <option value="jasmine">🌼 ياسمين</option>
-              <option value="jouri">🌹 جوري</option>
-              <option value="violet">🪻 بنفسج</option>
-              <option value="daffodil">🌻 نرجس</option>
-              <option value="lavender">🪻 لافندر</option>
-            </select>
-          </div>
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 block mb-1">المدة المحددة ⏱️</label>
+                <select
+                  value={habitDuration}
+                  onChange={(e: any) => setHabitDuration(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-amber-500"
+                >
+                  <option value="week">📅 هذا الأسبوع فقط (7 أيام)</option>
+                  <option value="month">🗓️ الشهر كامل (30 يوماً)</option>
+                  <option value="lifetime">♾️ مدى الحياة (مستمر دائماً)</option>
+                </select>
+              </div>
 
-          <div className="sm:col-span-3">
-            <label className="text-[11px] font-bold text-slate-700 block mb-1">وصف الخُلق والنصيحة المشجعة 📝</label>
-            <input
-              type="text"
-              placeholder="مثال: حاول إدخال السرور على مسلم ولو بابتسامة أو كلمة طيبة..."
-              value={habitDesc}
-              onChange={(e) => setHabitDesc(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-medium focus:outline-none focus:border-amber-500"
-            />
-          </div>
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 block mb-1">نوع زهرة الخُلق 🌸</label>
+                <select
+                  value={flowerType}
+                  onChange={(e: any) => setFlowerType(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-amber-500"
+                >
+                  <option value="tulip">🌷 توليب</option>
+                  <option value="jasmine">🌼 ياسمين</option>
+                  <option value="jouri">🌹 جوري</option>
+                  <option value="violet">🪻 بنفسج</option>
+                  <option value="daffodil">🌻 نرجس</option>
+                  <option value="lavender">🪻 لافندر</option>
+                </select>
+              </div>
 
-          <div className="sm:col-span-3 flex items-center justify-between mt-2">
-            {habitMsg && <span className="text-xs font-bold text-emerald-700">{habitMsg}</span>}
-            <button
-              type="submit"
-              disabled={addingHabit}
-              className="mr-auto px-5 py-2.5 rounded-2xl bg-amber-400 text-slate-950 font-black text-xs shadow-xs hover:bg-amber-300 active:scale-95 transition-all cursor-pointer flex items-center gap-1.5 border border-amber-500/40"
-            >
-              <Plus className="h-4 w-4 text-slate-950" /> {addingHabit ? "جاري النشر..." : "نشر الخُلق للأعضاء"}
-            </button>
+              <div className="sm:col-span-3">
+                <label className="text-[11px] font-bold text-slate-700 block mb-1">وصف الخُلق والنصيحة المشجعة 📝</label>
+                <input
+                  type="text"
+                  placeholder="مثال: حاول إدخال السرور على مسلم ولو بابتسامة أو كلمة طيبة..."
+                  value={habitDesc}
+                  onChange={(e) => setHabitDesc(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-medium focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div className="sm:col-span-3 flex items-center justify-between mt-2">
+                {habitMsg && <span className="text-xs font-bold text-emerald-700">{habitMsg}</span>}
+                <button
+                  type="submit"
+                  disabled={addingHabit}
+                  className="mr-auto px-5 py-2.5 rounded-2xl bg-amber-400 text-slate-950 font-black text-xs shadow-xs hover:bg-amber-300 active:scale-95 transition-all cursor-pointer flex items-center gap-1.5 border border-amber-500/40"
+                >
+                  <Plus className="h-4 w-4 text-slate-950" /> {addingHabit ? "جاري النشر..." : "نشر الخُلق للأعضاء"}
+                </button>
+              </div>
+            </form>
           </div>
-        </form>
+        )}
 
         {/* List of Published Global Habits with Rename/Edit and Delete */}
         {globalHabits.length > 0 && (
@@ -717,65 +1121,93 @@ function AdminPage() {
         )}
       </section>
 
-      {/* 2. Add Global Athkar Section */}
-      <section className="mb-8 rounded-3xl border border-indigo-200 bg-gradient-to-br from-indigo-50/70 to-blue-50/40 p-5 shadow-sm backdrop-blur">
-        <div className="flex items-center gap-2 mb-2">
-          <Sparkles className="h-5 w-5 text-indigo-600" />
-          <h2 className="text-base font-extrabold text-slate-900">إضافة ورْد ذِكر عام ونشره للجميع 📿</h2>
+      {/* 2. Add Global Athkar Section (Collapsible - Ultra Slim when closed) */}
+      <section className={`mb-3 rounded-2xl border transition-all ${
+        showThikrForm
+          ? "border-indigo-200 bg-gradient-to-br from-indigo-50/80 to-blue-50/40 p-4 shadow-xs"
+          : "border-indigo-200/80 bg-indigo-50/40 hover:bg-indigo-100/60 p-2 px-3 shadow-2xs"
+      }`}>
+        <div
+          onClick={() => setShowThikrForm(!showThikrForm)}
+          className="flex items-center justify-between cursor-pointer select-none"
+        >
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-indigo-600 shrink-0" />
+            <h2 className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+              <span>إضافة ورْد ذِكر عام ونشره للجميع 📿</span>
+              {globalAthkar.length > 0 && !showThikrForm && (
+                <span className="text-[10px] text-indigo-900 font-bold bg-indigo-100/80 px-1.5 py-0.2 rounded border border-indigo-200">
+                  ({globalAthkar.length} منشور)
+                </span>
+              )}
+            </h2>
+          </div>
+          <button
+            type="button"
+            className="px-2 py-0.5 rounded-md bg-indigo-100 hover:bg-indigo-200 text-indigo-950 text-[11px] font-bold transition-all flex items-center gap-1 border border-indigo-300/50"
+          >
+            <span>{showThikrForm ? "إخفاء ✖" : "+ إضافة ذِكر"}</span>
+            {showThikrForm ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+          </button>
         </div>
-        <p className="text-xs text-slate-600 font-medium mb-4">
-          يمكنك هنا إضافة أذكار وأوراد جماعية (مثل: الصلاة على النبي، استغفار، سبحان الله وبحمده...). وتحديد مدتها (أسبوع، شهر، أو مدى الحياة).
-        </p>
 
-        <form onSubmit={handleAddGlobalThikr} className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div>
-            <label className="text-[11px] font-bold text-slate-700 block mb-1">اسم الذِكر *</label>
-            <input
-              type="text"
-              placeholder="مثال: الصلاة على النبي صلى الله عليه وسلم..."
-              value={thikrName}
-              onChange={(e) => setThikrName(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-indigo-500"
-              required
-            />
-          </div>
+        {showThikrForm && (
+          <div className="mt-4 pt-3 border-t border-indigo-200/60 animate-in fade-in duration-150">
+            <p className="text-xs text-slate-600 font-medium mb-4">
+              يمكنك هنا إضافة أذكار وأوراد جماعية (مثل: الصلاة على النبي، استغفار، سبحان الله وبحمده...). وتحديد مدتها والعدد المطلوب.
+            </p>
 
-          <div>
-            <label className="text-[11px] font-bold text-slate-700 block mb-1">العدد المطلوب يومياً *</label>
-            <input
-              type="number"
-              min={1}
-              value={thikrCount}
-              onChange={(e) => setThikrCount(Number(e.target.value))}
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-indigo-500"
-              required
-            />
-          </div>
+            <form onSubmit={handleAddGlobalThikr} className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 block mb-1">اسم الذِكر *</label>
+                <input
+                  type="text"
+                  placeholder="مثال: الصلاة على النبي صلى الله عليه وسلم..."
+                  value={thikrName}
+                  onChange={(e) => setThikrName(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-indigo-500"
+                  required
+                />
+              </div>
 
-          <div>
-            <label className="text-[11px] font-bold text-slate-700 block mb-1">المدة المحددة ⏱️</label>
-            <select
-              value={thikrDuration}
-              onChange={(e: any) => setThikrDuration(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-indigo-500"
-            >
-              <option value="week">📅 هذا الأسبوع فقط (7 أيام)</option>
-              <option value="month">🗓️ الشهر كامل (30 يوماً)</option>
-              <option value="lifetime">♾️ مدى الحياة (مستمر دائماً)</option>
-            </select>
-          </div>
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 block mb-1">العدد المطلوب يومياً *</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={thikrCount}
+                  onChange={(e) => setThikrCount(Number(e.target.value))}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-indigo-500"
+                  required
+                />
+              </div>
 
-          <div className="sm:col-span-3 flex items-center justify-between mt-2">
-            {thikrMsg && <span className="text-xs font-bold text-emerald-700">{thikrMsg}</span>}
-            <button
-              type="submit"
-              disabled={addingThikr}
-              className="mr-auto px-5 py-2.5 rounded-2xl bg-indigo-600 text-white font-black text-xs shadow-xs hover:bg-indigo-700 active:scale-95 transition-all cursor-pointer flex items-center gap-1.5"
-            >
-              <Plus className="h-4 w-4 text-white" /> {addingThikr ? "جاري النشر..." : "نشر الذِكر للأعضاء 📿"}
-            </button>
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 block mb-1">المدة المحددة ⏱️</label>
+                <select
+                  value={thikrDuration}
+                  onChange={(e: any) => setThikrDuration(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-indigo-500"
+                >
+                  <option value="week">📅 هذا الأسبوع فقط (7 أيام)</option>
+                  <option value="month">🗓️ الشهر كامل (30 يوماً)</option>
+                  <option value="lifetime">♾️ مدى الحياة (مستمر دائماً)</option>
+                </select>
+              </div>
+
+              <div className="sm:col-span-3 flex items-center justify-between mt-2">
+                {thikrMsg && <span className="text-xs font-bold text-emerald-700">{thikrMsg}</span>}
+                <button
+                  type="submit"
+                  disabled={addingThikr}
+                  className="mr-auto px-5 py-2.5 rounded-2xl bg-indigo-600 text-white font-black text-xs shadow-xs hover:bg-indigo-700 active:scale-95 transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  <Plus className="h-4 w-4 text-white" /> {addingThikr ? "جاري النشر..." : "نشر الذِكر للأعضاء 📿"}
+                </button>
+              </div>
+            </form>
           </div>
-        </form>
+        )}
 
         {/* List of Published Global Athkar with Rename/Edit and Delete */}
         {globalAthkar.length > 0 && (
@@ -823,20 +1255,17 @@ function AdminPage() {
         )}
       </section>
 
-      {/* 2. Registered Members & Activity Inspection */}
+      {/* 3. Registered Members & Daily Results List */}
       <section className="mb-8 rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-sm backdrop-blur">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5 border-b border-slate-100 pb-4">
           <div>
             <div className="flex items-center gap-2">
               <Users className="h-5 w-5 text-indigo-600" />
-              <h2 className="text-lg font-extrabold text-slate-900">قائمة الأعضاء وتعبئتهم ({members.length})</h2>
+              <h2 className="text-lg font-extrabold text-slate-900">نتائج ومتابعة تعبئة الأعضاء ({members.length} عضو)</h2>
             </div>
-            <p className="text-xs text-slate-500 font-medium mt-0.5">
-              استعراض كافة الأشخاص الذين انضموا للتطبيق وتفاصيل ورد كل عضو.
-            </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={fetchMembersList}
               className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-600 transition-colors cursor-pointer"
@@ -845,106 +1274,453 @@ function AdminPage() {
               <RefreshCw className={`h-4 w-4 ${loadingMembers ? "animate-spin" : ""}`} />
             </button>
 
-            {/* Excel Export Button */}
+            {/* Leaderboard Toggle Button (Trophy Icon Only) */}
+            <button
+              type="button"
+              onClick={() => setShowLeaderboard((prev) => !prev)}
+              className={`p-2 rounded-xl border transition-all cursor-pointer shadow-2xs ${
+                showLeaderboard
+                  ? "bg-amber-400 text-slate-950 border-amber-500 ring-2 ring-amber-200"
+                  : "bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100"
+              }`}
+              title={showLeaderboard ? "إخفاء لوحة الأوائل ✖" : "🏆 عرض لوحة الأوائل والمتصدرين"}
+            >
+              <Trophy className="h-4.5 w-4.5 text-amber-600" />
+            </button>
+
+            {/* Excel Export Button (Download Icon Only) */}
             <button
               onClick={exportToExcel}
-              className="px-4 py-2 rounded-xl bg-emerald-600 text-white font-extrabold text-xs shadow-xs hover:bg-emerald-700 active:scale-95 transition-all cursor-pointer flex items-center gap-1.5"
+              className="p-2 rounded-xl bg-emerald-600 text-white shadow-2xs hover:bg-emerald-700 active:scale-95 transition-all cursor-pointer border border-emerald-700"
+              title="تصدير تقرير إكسل (Excel) 📊"
             >
-              <Download className="h-4 w-4" /> تصدير تقرير إكسل (Excel) 📊
+              <Download className="h-4.5 w-4.5" />
             </button>
           </div>
         </div>
 
-        {/* Member Cards Grid */}
+        {/* Member Results & Leaderboard Content */}
         {loadingMembers ? (
-          <p className="text-center text-xs text-slate-500 py-8 font-bold">جاري تحميل قائمة الأعضاء...</p>
+          <p className="text-center text-xs text-slate-500 py-8 font-bold">جاري تحميل النتائج السحابية...</p>
         ) : members.length === 0 ? (
-          <p className="text-center text-xs text-slate-400 py-8 font-bold">لا يوجد أعضاء مسجلين بعد في القاعدة.</p>
+          <p className="text-center text-xs text-slate-400 py-8 font-bold">لا يوجد أعضاء مسجلين بعد.</p>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-            {members.map((m) => {
-              const uData = getUserDataForMember(m, userDataMap);
-              const isSelected = selectedUser?.uid === m.uid;
-              const stats = getMemberStats(uData);
+          <div className="space-y-5">
+            {/* 🏆 Leaderboard / Top Achievers of the Week (Only visible when toggled) */}
+            {showLeaderboard && (() => {
+              const uniqueDates = getUniqueSubmissionDates(members, userDataMap, dateSortAsc);
+              const ranked = [...members]
+                .map((m) => {
+                  const uData = getUserDataForMember(m, userDataMap);
+                  let countDays = 0;
+                  let sumAvg = 0;
+                  uniqueDates.forEach((d) => {
+                    if (hasMemberSubmittedOnDate(uData, d)) {
+                      countDays++;
+                      sumAvg += getMemberStatsForDate(uData, d).totalAvg;
+                    }
+                  });
+                  const score = countDays > 0 ? Math.round(sumAvg / countDays) : 0;
+                  return { member: m, uData, countDays, score };
+                })
+                .sort((a, b) => b.score - a.score || b.countDays - a.countDays);
+
+              const topThree = ranked.slice(0, 3);
+              const medals = ["🥇 المركز الأول", "🥈 المركز الثاني", "🥉 المركز الثالث"];
+              const medalBgs = [
+                "bg-amber-100/90 border-amber-300 text-amber-950",
+                "bg-slate-100/90 border-slate-300 text-slate-900",
+                "bg-amber-200/50 border-amber-300 text-amber-900",
+              ];
 
               return (
-                <div
-                  key={m.uid}
-                  onClick={() => {
-                    setSelectedUser(m);
-                    fetchUserData(m);
-                  }}
-                  className={`p-4 rounded-2xl border transition-all cursor-pointer ${
-                    isSelected
-                      ? "border-amber-500 bg-amber-50/40 ring-2 ring-amber-200 shadow-md"
-                      : "border-slate-200 bg-white hover:border-amber-300 hover:shadow-xs"
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2.5">
-                      <span className="grid h-10 w-10 place-items-center rounded-2xl bg-amber-100 text-amber-900 font-black text-sm border border-amber-200/80 shadow-2xs">
-                        {(m.displayName || "م")[0]}
-                      </span>
-                      <div>
-                        <h3 className="text-sm font-black text-slate-900 flex items-center gap-1.5">
-                          <span>{m.displayName}</span>
-                          {m.isAdmin && (
-                            <span className="bg-amber-400 text-slate-950 text-[9px] font-black px-1.5 py-0.5 rounded-md">
-                              مدير
+                <div className="rounded-2xl border border-amber-300/80 bg-gradient-to-r from-amber-500/10 via-amber-100/30 to-yellow-500/10 p-4 shadow-2xs">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <Trophy className="h-5 w-5 text-amber-600" />
+                      <h3 className="text-sm font-black text-slate-900">🏆 أوائل الأسبوع والمتصدرون بالتعبئة</h3>
+                    </div>
+                    <span className="text-[10px] font-bold text-amber-900 bg-amber-200/80 px-2.5 py-1 rounded-lg border border-amber-300/60">
+                      اضغطي على الاسم لرؤية تفاصيل سبب تصدرها 🔍
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    {topThree.map((item, idx) => {
+                      const isSelected = selectedLeaderboardMember?.uid === item.member.uid;
+                      return (
+                        <div
+                          key={item.member.uid}
+                          onClick={() => {
+                            if (isSelected) {
+                              setSelectedLeaderboardMember(null);
+                            } else {
+                              setSelectedLeaderboardMember(item.member);
+                              fetchUserData(item.member);
+                            }
+                          }}
+                          className={`p-3 rounded-xl border flex items-center justify-between shadow-2xs cursor-pointer transition-all hover:scale-[1.01] ${
+                            isSelected
+                              ? "ring-2 ring-amber-500 border-amber-500 bg-amber-200/90"
+                              : medalBgs[idx] || "bg-white border-slate-200"
+                          }`}
+                        >
+                          <div>
+                            <span className="text-[10px] font-black block mb-0.5">{medals[idx]}</span>
+                            <span className="text-xs font-black">{item.member.displayName || "عضو"}</span>
+                            <span className="text-[10px] opacity-80 block font-semibold mt-0.5">
+                              عَبّأت {item.countDays} أيّام • {isSelected ? "إخفاء التفاصيل ✖" : "عرض التفاصيل 🔍"}
                             </span>
-                          )}
-                        </h3>
-                        <span className="text-[11px] text-slate-500 font-medium block dir-ltr text-right">
-                          {m.email || "بدون بريد"}
-                        </span>
+                          </div>
+                          <span className="text-sm font-black text-emerald-800 bg-white/90 px-2.5 py-1 rounded-lg border border-slate-200 shadow-2xs">
+                            {item.score}%
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Detailed breakdown for selected leaderboard member */}
+                  {selectedLeaderboardMember && (
+                    <div className="mt-4 p-3.5 bg-white rounded-2xl border border-amber-300 shadow-xs">
+                      <div className="flex items-center justify-between mb-2 pb-2 border-b border-amber-100">
+                        <h4 className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+                          <span>تفاصيل وسجل إنجاز المتصدرة:</span>
+                          <span className="text-indigo-800 font-black">{selectedLeaderboardMember.displayName}</span>
+                        </h4>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedLeaderboardMember(null)}
+                          className="text-[10px] font-extrabold text-slate-600 hover:text-slate-900 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200 cursor-pointer"
+                        >
+                          إغلاق التفاصيل ✖
+                        </button>
                       </div>
+                      <MemberDetailView
+                        member={selectedLeaderboardMember}
+                        uData={getUserDataForMember(selectedLeaderboardMember, userDataMap)}
+                      />
                     </div>
-
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedUser(m);
-                        fetchUserData(m);
-                      }}
-                      className="px-3 py-1.5 text-xs font-black rounded-xl bg-yellow-400 text-slate-950 hover:bg-yellow-300 transition-all cursor-pointer border border-yellow-500/40 shadow-2xs"
-                    >
-                      {fetchingData && isSelected ? "جاري الجلب..." : "عرض التفاصيل الكاملة 👁️"}
-                    </button>
-                  </div>
-
-                  {/* Summary Commitment Indicators */}
-                  <div className="grid grid-cols-4 gap-1.5 mt-3 pt-2.5 border-t border-slate-100 text-center text-[10px]">
-                    <div className="bg-amber-50 p-2 rounded-xl border border-amber-100/80">
-                      <span className="text-amber-800 font-bold block mb-0.5">ورد القرآن</span>
-                      <span className="font-black text-amber-700 text-xs tabular-nums">
-                        {stats.quranPct}%
-                      </span>
-                    </div>
-
-                    <div className="bg-indigo-50 p-2 rounded-xl border border-indigo-100/80">
-                      <span className="text-indigo-800 font-bold block mb-0.5">ورد الأذكار</span>
-                      <span className="font-black text-indigo-700 text-xs tabular-nums">
-                        {stats.athkarPct}%
-                      </span>
-                    </div>
-
-                    <div className="bg-emerald-50 p-2 rounded-xl border border-emerald-100/80">
-                      <span className="text-emerald-800 font-bold block mb-0.5">التزام الصلاة</span>
-                      <span className="font-black text-emerald-700 text-xs tabular-nums">
-                        {stats.prayerPct}%
-                      </span>
-                    </div>
-
-                    <div className="bg-purple-50 p-2 rounded-xl border border-purple-100/80">
-                      <span className="text-purple-800 font-bold block mb-0.5">الأخلاق والسنن</span>
-                      <span className="font-black text-purple-700 text-xs tabular-nums">
-                        {stats.habitsPct}%
-                      </span>
-                    </div>
-                  </div>
+                  )}
                 </div>
               );
-            })}
+            })()}
+
+            {/* View Controls & Filter Switches */}
+            <div className="flex flex-wrap items-center justify-between gap-2 p-3 bg-slate-100/70 rounded-2xl border border-slate-200 text-xs font-bold">
+              {/* View Mode Switcher */}
+              <div className="flex items-center gap-1.5 bg-white p-1 rounded-xl border border-slate-200 shadow-2xs">
+                <button
+                  type="button"
+                  onClick={() => setViewMode("byDate")}
+                  className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                    viewMode === "byDate"
+                      ? "bg-amber-400 text-slate-950 shadow-xs font-black"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  📅 حسب الأيام
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode("byMember")}
+                  className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                    viewMode === "byMember"
+                      ? "bg-amber-400 text-slate-950 shadow-xs font-black"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  👤 حسب الأعضاء
+                </button>
+              </div>
+
+              {/* Toggles */}
+              <div className="flex items-center gap-3">
+                {/* Filter strictly active submitters */}
+                {viewMode === "byDate" && (
+                  <label className="flex items-center gap-1.5 text-[11px] font-extrabold text-slate-800 cursor-pointer select-none bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-2xs hover:bg-amber-50">
+                    <input
+                      type="checkbox"
+                      checked={onlySubmitted}
+                      onChange={(e) => setOnlySubmitted(e.target.checked)}
+                      className="rounded accent-amber-500 h-3.5 w-3.5 cursor-pointer"
+                    />
+                    <span>إظهار من قَام بالتعبئة فقط في هذا اليوم</span>
+                  </label>
+                )}
+
+                {/* Sort Order */}
+                {viewMode === "byDate" && (
+                  <button
+                    type="button"
+                    onClick={() => setDateSortAsc(!dateSortAsc)}
+                    className="px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-all cursor-pointer text-[11px] font-extrabold flex items-center gap-1 shadow-2xs"
+                  >
+                    <span>{dateSortAsc ? "ترتيب: من بداية الأسبوع (السبت) ⬆️" : "ترتيب: الأحدث أولاً ⬇️"}</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* MODE 1: Grouped by Date */}
+            {viewMode === "byDate" && (
+              <div className="space-y-4">
+                {getUniqueSubmissionDates(members, userDataMap, dateSortAsc).map((dateStr) => {
+                  const isDayCollapsed = !!collapsedDays[dateStr];
+
+                  // Sort members on this day by who submitted and completed the most first
+                  const sortedMembers = [...members].sort((a, b) => {
+                    const uDataA = getUserDataForMember(a, userDataMap);
+                    const uDataB = getUserDataForMember(b, userDataMap);
+                    const subA = hasMemberSubmittedOnDate(uDataA, dateStr);
+                    const subB = hasMemberSubmittedOnDate(uDataB, dateStr);
+
+                    if (subA !== subB) return subA ? -1 : 1;
+
+                    const statsA = getMemberStatsForDate(uDataA, dateStr);
+                    const statsB = getMemberStatsForDate(uDataB, dateStr);
+                    if (statsB.totalAvg !== statsA.totalAvg) {
+                      return statsB.totalAvg - statsA.totalAvg;
+                    }
+                    return (a.displayName || "").localeCompare(b.displayName || "", "ar");
+                  });
+
+                  // Filter members who actually submitted on this day
+                  const submittedMembers = sortedMembers.filter((m) =>
+                    hasMemberSubmittedOnDate(getUserDataForMember(m, userDataMap), dateStr)
+                  );
+
+                  const displayList = onlySubmitted ? submittedMembers : sortedMembers;
+
+                  return (
+                    <div key={dateStr} className="rounded-2xl border border-teal-200/80 bg-slate-50/50 overflow-hidden shadow-2xs">
+                      {/* Soft Pastel Light Header Bar */}
+                      <div
+                        onClick={() => setCollapsedDays((prev) => ({ ...prev, [dateStr]: !prev[dateStr] }))}
+                        className="flex items-center justify-between p-3.5 bg-gradient-to-r from-teal-50 via-emerald-50 to-teal-100/60 text-slate-900 cursor-pointer hover:bg-teal-100/80 transition-all select-none border-b border-teal-200/80"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Calendar className="h-4.5 w-4.5 text-teal-700" />
+                          <h3 className="text-xs font-black text-slate-900">{formatArabicDate(dateStr)} ({dateStr})</h3>
+                          <span className="bg-emerald-200/70 text-emerald-950 border border-emerald-300 text-[10px] font-black px-2.5 py-0.5 rounded-md shadow-2xs">
+                            تمت التعبئة بواسطة {submittedMembers.length} من {sortedMembers.length} أعضاء
+                          </span>
+                        </div>
+                        {isDayCollapsed ? <ChevronDown className="h-4 w-4 text-teal-800" /> : <ChevronUp className="h-4 w-4 text-teal-800" />}
+                      </div>
+
+                      {/* Day Content: Member Rows */}
+                      {!isDayCollapsed && (
+                        <div className="p-3 space-y-2 bg-white">
+                          {displayList.length === 0 ? (
+                            <p className="text-center text-xs text-slate-400 py-4 font-bold bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+                              لم يتم تسجيل أي أعضاء بعد.
+                            </p>
+                          ) : (
+                            displayList.map((m, idx) => {
+                              const uData = getUserDataForMember(m, userDataMap);
+                              const stats = getMemberStatsForDate(uData, dateStr);
+                              const memberNumber = idx + 1;
+                              const key = `${dateStr}-${m.uid}`;
+                              const isExpanded = expandedMemberKey === key;
+                              const isSubmitted = hasMemberSubmittedOnDate(uData, dateStr);
+
+                              return (
+                                <div key={m.uid} className="flex flex-col">
+                                  {/* Single Line Person Row */}
+                                  <div className={`flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-xl border transition-all ${
+                                    isSubmitted
+                                      ? "border-emerald-300/80 hover:border-amber-400 bg-emerald-50/30 shadow-2xs"
+                                      : "border-slate-200 hover:border-slate-300 bg-slate-50/40 opacity-80 hover:opacity-100"
+                                  }`}>
+                                    <div className="flex items-center gap-2">
+                                      <span className={`font-black text-xs h-6 w-6 rounded-lg flex items-center justify-center shrink-0 text-[11px] border ${
+                                        isSubmitted
+                                          ? "text-emerald-950 bg-emerald-200/80 border-emerald-300"
+                                          : "text-slate-500 bg-slate-200/80 border-slate-300"
+                                      }`}>
+                                        {memberNumber}
+                                      </span>
+                                      <span className={`font-extrabold text-xs ${isSubmitted ? "text-slate-900" : "text-slate-600"}`}>
+                                        {m.displayName || "عضو"}
+                                      </span>
+                                      {m.isAdmin && (
+                                        <span className="bg-amber-400 text-slate-950 text-[9px] font-black px-1.5 py-0.5 rounded-md">
+                                          مدير
+                                        </span>
+                                      )}
+                                      {isSubmitted ? (
+                                        <span className="bg-emerald-100 text-emerald-800 text-[9px] font-black px-1.5 py-0.5 rounded-md border border-emerald-200">
+                                          قام بالتعبئة ✓
+                                        </span>
+                                      ) : (
+                                        <span className="bg-slate-200/70 text-slate-500 text-[9px] font-semibold px-1.5 py-0.5 rounded-md border border-slate-300/70">
+                                          لم يُعبّئ
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    {/* Ratio Boxes (Gray when 0%, Brightly colored when > 0%) */}
+                                    <div className="flex items-center gap-1.5 text-[10px] font-bold">
+                                      <span className={`px-2 py-1 rounded-lg border transition-all ${
+                                        stats.quranPct > 0
+                                          ? "bg-amber-100 text-amber-950 border-amber-300 font-black shadow-2xs"
+                                          : "bg-slate-100 text-slate-400 border-slate-200/80 font-medium"
+                                      }`}>
+                                        📖 القرآن {stats.quranPct}%
+                                      </span>
+
+                                      <span className={`px-2 py-1 rounded-lg border transition-all ${
+                                        stats.athkarPct > 0
+                                          ? "bg-indigo-100 text-indigo-950 border-indigo-300 font-black shadow-2xs"
+                                          : "bg-slate-100 text-slate-400 border-slate-200/80 font-medium"
+                                      }`}>
+                                        📿 الأذكار {stats.athkarPct}%
+                                      </span>
+
+                                      <span className={`px-2 py-1 rounded-lg border transition-all ${
+                                        stats.prayerPct > 0
+                                          ? "bg-emerald-100 text-emerald-950 border-emerald-300 font-black shadow-2xs"
+                                          : "bg-slate-100 text-slate-400 border-slate-200/80 font-medium"
+                                      }`}>
+                                        🕌 الصلاة {stats.prayerPct}%
+                                      </span>
+
+                                      <span className={`px-2 py-1 rounded-lg border transition-all ${
+                                        stats.habitsPct > 0
+                                          ? "bg-purple-100 text-purple-950 border-purple-300 font-black shadow-2xs"
+                                          : "bg-slate-100 text-slate-400 border-slate-200/80 font-medium"
+                                      }`}>
+                                        🌸 الأخلاق {stats.habitsPct}%
+                                      </span>
+
+                                      {/* Eye Icon Button */}
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setExpandedMemberKey(isExpanded ? null : key);
+                                          setSelectedUser(m);
+                                          fetchUserData(m);
+                                        }}
+                                        className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
+                                          isExpanded
+                                            ? "bg-amber-400 text-slate-950 border-amber-500 shadow-xs"
+                                            : "bg-slate-100 text-slate-700 border-slate-200 hover:bg-amber-100 hover:text-amber-900"
+                                        }`}
+                                        title={isExpanded ? "إخفاء التفاصيل" : "عرض التفاصيل تحت الاسم"}
+                                      >
+                                        <Eye className="h-4 w-4" />
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  {/* Collapsible Details list directly beneath this member */}
+                                  {isExpanded && (
+                                    <MemberDetailView member={m} uData={uData} />
+                                  )}
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* MODE 2: Grouped by Member (Slim Single-Line Rows, Numbered Alphabetically, No Percentages) */}
+            {viewMode === "byMember" && (
+              <div className="space-y-2">
+                {[...members]
+                  .sort((a, b) => (a.displayName || "").localeCompare(b.displayName || "", "ar"))
+                  .map((m, idx) => {
+                    const uData = getUserDataForMember(m, userDataMap);
+                    const isSelected = selectedUser?.uid === m.uid;
+                    const uniqueDates = getUniqueSubmissionDates(members, userDataMap, dateSortAsc);
+                    const activeDaysCount = uniqueDates.filter((d) => hasMemberSubmittedOnDate(uData, d)).length;
+                    const memberNumber = idx + 1;
+
+                    return (
+                      <div key={m.uid} className="flex flex-col">
+                        <div
+                          onClick={() => {
+                            if (isSelected) {
+                              setSelectedUser(null);
+                            } else {
+                              setSelectedUser(m);
+                              fetchUserData(m);
+                            }
+                          }}
+                          className={`flex items-center justify-between gap-3 p-3 rounded-xl border transition-all cursor-pointer ${
+                            isSelected
+                              ? "border-amber-400 bg-amber-50/80 ring-2 ring-amber-200 shadow-xs"
+                              : "border-slate-200 bg-white hover:border-amber-300 hover:bg-slate-50/80 shadow-2xs"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <span className="font-black text-xs text-indigo-950 bg-indigo-100 border border-indigo-200 h-6.5 w-6.5 rounded-lg flex items-center justify-center shrink-0">
+                              {memberNumber}
+                            </span>
+                            <span className="font-extrabold text-xs text-slate-900 truncate">
+                              {m.displayName || "عضو"}
+                            </span>
+                            {m.isAdmin && (
+                              <span className="bg-amber-400 text-slate-950 text-[9px] font-black px-1.5 py-0.5 rounded-md shrink-0">
+                                مدير
+                              </span>
+                            )}
+                            <span className="text-[11px] text-slate-400 font-normal dir-ltr hidden sm:inline truncate">
+                              {m.email}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="px-2.5 py-1 text-[11px] font-black rounded-lg bg-emerald-100 text-emerald-950 border border-emerald-200 shadow-2xs">
+                              عَبّأت {activeDaysCount} أيّام
+                            </span>
+                            <button
+                              type="button"
+                              className={`p-1.5 rounded-lg text-[10px] font-bold border transition-colors ${
+                                isSelected
+                                  ? "bg-amber-400 text-slate-950 border-amber-500"
+                                  : "bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200"
+                              }`}
+                              title={isSelected ? "إخفاء التفاصيل" : "عرض التفاصيل"}
+                            >
+                              <Eye className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Collapsible Member Detailed View directly beneath this row */}
+                        {isSelected && (
+                          <div className="mt-2 mb-2 p-4 bg-white rounded-2xl border border-amber-300 shadow-xs animate-in fade-in duration-150">
+                            <div className="flex items-center justify-between mb-3 pb-2 border-b border-amber-100">
+                              <h4 className="text-xs font-black text-slate-900">
+                                سجل وتفاصيل تعبئة العضو: <span className="text-indigo-800">{m.displayName}</span>
+                              </h4>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedUser(null);
+                                }}
+                                className="text-[10px] font-bold text-slate-500 hover:text-slate-800 bg-slate-100 px-2 py-0.5 rounded-lg border border-slate-200 cursor-pointer"
+                              >
+                                إغلاق التفاصيل ✖
+                              </button>
+                            </div>
+                            <MemberDetailView member={m} uData={uData} />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+              </div>
+            )}
           </div>
         )}
       </section>

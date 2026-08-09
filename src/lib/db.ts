@@ -89,7 +89,7 @@ export interface CustomHabit {
   start_date: string; // yyyy-mm-dd
   status: HabitStatus;
   created_at: string;
-  flower_type?: "tulip" | "jasmine" | "jouri" | "violet" | "daffodil";
+  flower_type?: "tulip" | "jasmine" | "jouri" | "violet" | "daffodil" | "lavender";
 }
 
 export interface CustomHabitProgress {

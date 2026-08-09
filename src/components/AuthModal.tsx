@@ -21,6 +21,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
 
   if (!isOpen) return null;
 
+  const validateArabicFullName = (val: string): string | null => {
+    const clean = val.trim();
+    if (!clean) return "يرجى كتابة الاسم الثلاثي.";
+    if (/[a-zA-Z]/.test(clean)) {
+      return "غير مسموح بكتابة الاسم باللغة الإنجليزية. يرجى كتابة الاسم باللغة العربية حصراً.";
+    }
+    const arabicRegex = /^[\u0600-\u06FF\s]+$/;
+    if (!arabicRegex.test(clean)) {
+      return "يرجى كتابة الاسم بالحروف العربية فقط بدون أرقام أو رموز خاصة.";
+    }
+    const parts = clean.split(/\s+/).filter(Boolean);
+    if (parts.length < 3) {
+      return "يرجى إدخال اسمك الثلاثي الكامل باللغة العربية (3 أسماء على الأقل: الاسم، واسم الأب، والكنية).";
+    }
+    return null;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg("");
@@ -33,13 +50,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
         setSuccessMsg("تم تسجيل الدخول واسترجاع بياناتك بنجاح!");
         setTimeout(() => onClose(), 1200);
       } else {
-        const nameParts = name.trim().split(/\s+/).filter(Boolean);
-        if (nameParts.length < 3) {
-          setErrorMsg("يرجى إدخال اسمك الثلاثي الكامل (على الأقل 3 أسماء: الاسم، واسم الأب، والكنية).");
+        const nameValErr = validateArabicFullName(name);
+        if (nameValErr) {
+          setErrorMsg(nameValErr);
           setSubmitting(false);
           return;
         }
-        await register(name, email, password);
+        await register(name.trim(), email, password);
         setSuccessMsg("تم إنشاء الحساب وحفظ جميع بياناتك الحالية سحابياً!");
         setTimeout(() => onClose(), 1200);
       }
@@ -133,11 +150,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                     <button
                       type="button"
                       onClick={async () => {
-                        if (updatedName.trim()) {
-                          await updateFullName(updatedName.trim());
-                          setEditingName(false);
-                          setSuccessMsg("تم تحديث الاسم الثلاثي بنجاح!");
+                        const err = validateArabicFullName(updatedName);
+                        if (err) {
+                          setErrorMsg(err);
+                          return;
                         }
+                        await updateFullName(updatedName.trim());
+                        setEditingName(false);
+                        setSuccessMsg("تم تحديث الاسم الثلاثي بنجاح!");
                       }}
                       className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-bold rounded-xl hover:bg-indigo-700 cursor-pointer"
                     >
