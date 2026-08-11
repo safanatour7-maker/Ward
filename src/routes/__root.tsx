@@ -87,6 +87,15 @@ function RootComponent() {
   const location = useLocation();
   const [activeToast, setActiveToast] = useState<NotificationItem | null>(null);
   const [isCenterOpen, setIsCenterOpen] = useState(false);
+  const [showQuotaBanner, setShowQuotaBanner] = useState(false);
+
+  useEffect(() => {
+    import("../lib/cloud-sync").then(({ isQuotaExceeded }) => {
+      if (isQuotaExceeded()) {
+        setShowQuotaBanner(true);
+      }
+    });
+  }, []);
 
   // Automatically close Notification Center on any route changes (e.g. from service worker click)
   useEffect(() => {
@@ -143,6 +152,24 @@ function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
       <div dir="rtl" className="app-shell relative">
+        {/* Firestore Quota Exceeded Friendly Banner */}
+        {showQuotaBanner && (
+          <div className="bg-amber-100 border-b border-amber-300 text-amber-950 px-4 py-2.5 text-xs font-bold flex items-center justify-between gap-2 shadow-2xs">
+            <div className="flex items-center gap-2">
+              <span className="text-base">⚠️</span>
+              <span>
+                تنبيه المزامنة السحابية: تم الوصول للحد الأقصى اليومي المجاني (Firestore Quota Limit). التطبيق يحفظ بياناتك محلياً بضمان 100% وتجدد الحصّة تلقائياً.
+              </span>
+            </div>
+            <button
+              onClick={() => setShowQuotaBanner(false)}
+              className="px-2 py-0.5 rounded bg-amber-200 hover:bg-amber-300 text-amber-900 text-[10px] font-black cursor-pointer transition-colors"
+            >
+              إغلاق ✕
+            </button>
+          </div>
+        )}
+
         {/* Elegant Top-Drop Toast Banner */}
         {activeToast && (
           <div className="fixed top-4 left-4 right-4 z-50 mx-auto max-w-md animate-in slide-in-from-top duration-300">

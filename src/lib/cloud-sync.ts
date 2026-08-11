@@ -16,10 +16,31 @@ import {
 let quotaExceededCooldownUntil = 0;
 let syncDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
+export function isQuotaExceeded(): boolean {
+  if (typeof window === "undefined") return false;
+  const stored = localStorage.getItem("firestore_quota_cooldown_until");
+  if (stored) {
+    const num = parseInt(stored, 10);
+    if (!isNaN(num)) {
+      if (Date.now() < num) return true;
+      else localStorage.removeItem("firestore_quota_cooldown_until");
+    }
+  }
+  return Date.now() < quotaExceededCooldownUntil;
+}
+
+export function setQuotaExceededCooldown(hours = 12): void {
+  const until = Date.now() + hours * 60 * 60 * 1000;
+  quotaExceededCooldownUntil = until;
+  if (typeof window !== "undefined") {
+    localStorage.setItem("firestore_quota_cooldown_until", String(until));
+  }
+}
+
 export async function pushLocalToCloudDirect(userId: string): Promise<boolean> {
   if (!db || !userId) return false;
 
-  if (Date.now() < quotaExceededCooldownUntil) {
+  if (isQuotaExceeded()) {
     return false;
   }
 
@@ -42,7 +63,13 @@ export async function pushLocalToCloudDirect(userId: string): Promise<boolean> {
       prayerLogs.length === 0;
 
     if (isLocalEmpty) {
-      const existingSnap = await getDoc(doc(dbFirestore, "user_data", userId)).catch(() => null);
+      const existingSnap = await getDoc(doc(dbFirestore, "user_data", userId)).catch((err: any) => {
+        const errStr = String(err?.message || err || "");
+        if (errStr.includes("resource-exhausted") || errStr.includes("Quota limit exceeded") || errStr.includes("quota")) {
+          setQuotaExceededCooldown(12);
+        }
+        return null;
+      });
       if (existingSnap && existingSnap.exists()) {
         const exData = existingSnap.data();
         if (
@@ -85,7 +112,7 @@ export async function pushLocalToCloudDirect(userId: string): Promise<boolean> {
           const cleanEmail = parsed.email.trim().toLowerCase();
           const accDocId = "acc_" + cleanEmail.replace(/[^a-zA-Z0-9]/g, "_");
           if (accDocId !== userId) {
-            await setDoc(doc(dbFirestore, "user_data", accDocId), dataPayload, { merge: true }).catch(() => {});
+            await setDoc(doc(dbFirestore, "user_data", accDocId), dataPayload, { merge: true });
           }
         }
       } catch (e) {}
@@ -96,7 +123,7 @@ export async function pushLocalToCloudDirect(userId: string): Promise<boolean> {
     const errStr = String(error?.message || error || "");
     if (errStr.includes("resource-exhausted") || errStr.includes("Quota limit exceeded") || errStr.includes("quota")) {
       console.warn("Firestore daily quota limit reached. Application will continue saving data locally on device.");
-      quotaExceededCooldownUntil = Date.now() + 60 * 60 * 1000; // 1 hour cooldown
+      setQuotaExceededCooldown(12);
     } else {
       console.error("Failed to push local data to cloud:", error);
     }
@@ -106,7 +133,7 @@ export async function pushLocalToCloudDirect(userId: string): Promise<boolean> {
 
 export function pushLocalToCloud(userId: string): Promise<boolean> {
   return new Promise((resolve) => {
-    if (Date.now() < quotaExceededCooldownUntil) {
+    if (isQuotaExceeded()) {
       resolve(false);
       return;
     }
@@ -322,6 +349,7 @@ function mergeGenericItems<T extends { id?: number; global_id?: string; name?: s
 
 export async function pullCloudToLocal(userId: string): Promise<boolean> {
   if (!db || !userId) return false;
+  if (isQuotaExceeded()) return false;
 
   try {
     // 1. Build list of candidate doc IDs to inspect
@@ -481,7 +509,7 @@ export async function pullCloudToLocal(userId: string): Promise<boolean> {
 
 export function autoCloudSync(): void {
   if (typeof window === "undefined") return;
-  if (Date.now() < quotaExceededCooldownUntil) return;
+  if (isQuotaExceeded()) return;
   const savedSession = localStorage.getItem("app_account_session");
   if (!savedSession) return;
   try {

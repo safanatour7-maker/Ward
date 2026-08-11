@@ -2,12 +2,13 @@ import React, { useState, useEffect } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { collection, getDocs, doc, getDoc, onSnapshot } from "firebase/firestore";
 import { dbFirestore } from "@/lib/firebase";
+import { setQuotaExceededCooldown } from "@/lib/cloud-sync";
 import { useAuth, getAccountDocId } from "@/context/AuthContext";
 import { createGlobalHabit, updateGlobalHabit, deleteGlobalHabit } from "@/lib/habits";
 import { createGlobalThikr, updateGlobalThikr, deleteGlobalThikr } from "@/lib/athkar";
 import { isoDate, formatArabicDate, arabicMonthYear } from "@/lib/date-utils";
 import { totalPagesFor, surahName } from "@/lib/quran-text";
-import { ShieldCheck, Users, Download, Plus, Sparkles, Lock, ArrowRight, CheckCircle2, Clock, BookOpen, CircleDot, Award, Calendar, RefreshCw, Edit2, Trash2, ChevronDown, ChevronUp, Eye, EyeOff, Trophy, Filter } from "lucide-react";
+import { ShieldCheck, Users, Download, Plus, Sparkles, Lock, ArrowRight, CheckCircle2, Clock, BookOpen, CircleDot, Award, Calendar, RefreshCw, Edit2, Trash2, ChevronDown, ChevronUp, Eye, EyeOff, Trophy, Filter, Heart, CalendarCheck, CalendarDays } from "lucide-react";
 
 export const Route = createFileRoute("/admin")({
   component: AdminPage,
@@ -276,6 +277,47 @@ function hasMemberSubmittedOnDate(uData?: UserCloudData, targetDate?: string): b
   return stats.totalAvg > 0 || stats.quranPct > 0 || stats.athkarPct > 0 || stats.prayerPct > 0 || stats.habitsPct > 0;
 }
 
+function getOverallMemberStats(uData: UserCloudData | undefined, uniqueDates: string[]) {
+  if (!uData || !uniqueDates || uniqueDates.length === 0) {
+    return { quranPct: 0, athkarPct: 0, prayerPct: 0, habitsPct: 0, totalAvgPct: 0, submittedDaysCount: 0 };
+  }
+
+  let submittedDaysCount = 0;
+  let sumQuran = 0;
+  let sumAthkar = 0;
+  let sumPrayer = 0;
+  let sumHabits = 0;
+
+  for (const dateStr of uniqueDates) {
+    const isSubmitted = hasMemberSubmittedOnDate(uData, dateStr);
+    if (isSubmitted) {
+      submittedDaysCount++;
+    }
+    const s = getMemberStatsForDate(uData, dateStr);
+    sumQuran += s.quranPct;
+    sumAthkar += s.athkarPct;
+    sumPrayer += s.prayerPct;
+    sumHabits += s.habitsPct;
+  }
+
+  const totalDays = Math.max(1, uniqueDates.length);
+
+  const quranPct = Math.round(sumQuran / totalDays);
+  const athkarPct = Math.round(sumAthkar / totalDays);
+  const prayerPct = Math.round(sumPrayer / totalDays);
+  const habitsPct = Math.round(sumHabits / totalDays);
+  const totalAvgPct = Math.round((quranPct + athkarPct + prayerPct + habitsPct) / 4);
+
+  return {
+    quranPct,
+    athkarPct,
+    prayerPct,
+    habitsPct,
+    totalAvgPct,
+    submittedDaysCount,
+  };
+}
+
 function getUniqueSubmissionDates(
   members: UserProfileDoc[],
   userDataMap: Record<string, UserCloudData>,
@@ -307,7 +349,60 @@ function getUniqueSubmissionDates(
   return array;
 }
 
-function MemberDetailView({ member, uData }: { member: UserProfileDoc; uData?: UserCloudData }) {
+function MosqueIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M7 12C7 8 9.5 5.5 12 4C14.5 5.5 17 8 17 12Z" fill="white" />
+      <path d="M12 2v2" />
+      <circle cx="12" cy="1.8" r="0.8" fill="currentColor" />
+      <path d="M4 21V12h16v9" fill="white" />
+      <path d="M10 21v-4a2 2 0 0 1 4 0v4" fill="white" />
+      <path d="M2 21V9.5l1.5-1.5L5 9.5V21" fill="white" />
+      <path d="M19 21V9.5l1.5-1.5L22 9.5V21" fill="white" />
+      <path d="M1 21h22" />
+    </svg>
+  );
+}
+
+const PrayerIcon = MosqueIcon;
+
+function TasbihIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="7.5" r="1.8" fill="white" />
+      <circle cx="16" cy="9.5" r="1.8" fill="white" />
+      <circle cx="17.5" cy="13.5" r="1.8" fill="white" />
+      <circle cx="15" cy="17.2" r="1.8" fill="white" />
+      <circle cx="9" cy="17.2" r="1.8" fill="white" />
+      <circle cx="6.5" cy="13.5" r="1.8" fill="white" />
+      <circle cx="8" cy="9.5" r="1.8" fill="white" />
+      <path d="M12 3.5v2.2" />
+      <circle cx="12" cy="3.5" r="1.2" fill="white" />
+      <path d="M10.5 2h3" />
+    </svg>
+  );
+}
+
+function getPctBadgeClass(pct: number) {
+  if (pct < 25) {
+    return "bg-rose-100 text-rose-950 border-rose-300 font-black shadow-2xs";
+  } else if (pct < 50) {
+    return "bg-amber-100 text-amber-950 border-amber-300 font-black shadow-2xs";
+  } else if (pct < 75) {
+    return "bg-sky-100 text-sky-950 border-sky-300 font-black shadow-2xs";
+  } else {
+    return "bg-emerald-100 text-emerald-950 border-emerald-300 font-black shadow-2xs";
+  }
+}
+
+function getPctTextColorClass(pct: number) {
+  if (pct < 25) return "text-rose-600 font-black";
+  if (pct < 50) return "text-amber-600 font-black";
+  if (pct < 75) return "text-sky-600 font-black";
+  return "text-emerald-600 font-black";
+}
+
+function MemberDetailView({ member, uData, activeCategory, uniqueDates = [] }: { member: UserProfileDoc; uData?: UserCloudData; activeCategory?: string; uniqueDates?: string[] }) {
   if (!uData) {
     return (
       <div className="p-4 bg-slate-50 rounded-2xl text-center text-xs text-slate-500 font-medium my-2">
@@ -316,7 +411,7 @@ function MemberDetailView({ member, uData }: { member: UserProfileDoc; uData?: U
     );
   }
 
-  const s = getMemberStats(uData);
+  const s = getOverallMemberStats(uData, uniqueDates);
 
   // 1. Quran
   let selectedSurahIds: number[] = [];
@@ -342,155 +437,274 @@ function MemberDetailView({ member, uData }: { member: UserProfileDoc; uData?: U
   // 4. Habits
   const customHabits = uData?.customHabits || [];
 
+  // Unified list of dates for daily breakdown
+  const displayDates = uniqueDates.length > 0 
+    ? [...uniqueDates].sort().reverse()
+    : Array.from(new Set([
+        ...(prayerLogs || []).map((p: any) => p.date),
+        ...(uData?.thikrProgress || []).map((t: any) => t.date),
+        ...(uData?.customHabitProgress || []).map((h: any) => h.date),
+        ...(uData?.quranDailyReading || []).map((q: any) => q.date)
+      ])).filter(Boolean).sort().reverse();
+
+  const showAll = !activeCategory || activeCategory === "mostDays" || activeCategory === "name";
+
   return (
-    <div className="space-y-3 p-4 bg-amber-50/50 rounded-2xl border border-amber-300 my-2 text-right dir-rtl animate-in fade-in duration-150 shadow-sm">
-      <div className="flex items-center justify-between pb-2 border-b border-amber-200/80">
-        <span className="text-xs font-black text-amber-900 flex items-center gap-1">
-          📜 تفاصيل تعبئة العضو: {member.displayName}
-        </span>
-        <span className="text-[10px] text-slate-500 font-medium dir-ltr">{member.email}</span>
-      </div>
+    <div className="space-y-4 p-4 bg-amber-50/50 rounded-2xl border border-amber-300 my-2 text-right dir-rtl animate-in fade-in duration-150 shadow-sm">
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-[10px]">
-        <div className="bg-white p-2 rounded-xl border border-amber-200 shadow-2xs">
-          <span className="text-amber-800 font-bold block">القرآن الكريم</span>
-          <span className="font-black text-amber-700 text-xs tabular-nums">{s.quranPct}%</span>
-        </div>
-        <div className="bg-white p-2 rounded-xl border border-indigo-200 shadow-2xs">
-          <span className="text-indigo-800 font-bold block">الأذكار اليومية</span>
-          <span className="font-black text-indigo-700 text-xs tabular-nums">{s.athkarPct}%</span>
-        </div>
-        <div className="bg-white p-2 rounded-xl border border-emerald-200 shadow-2xs">
-          <span className="text-emerald-800 font-bold block">التزام الصلاة</span>
-          <span className="font-black text-emerald-700 text-xs tabular-nums">{s.prayerPct}%</span>
-        </div>
-        <div className="bg-white p-2 rounded-xl border border-purple-200 shadow-2xs">
-          <span className="text-purple-800 font-bold block">الأخلاق والسنن</span>
-          <span className="font-black text-purple-700 text-xs tabular-nums">{s.habitsPct}%</span>
-        </div>
-      </div>
-
-      {/* Quran Details */}
-      <div className="p-3 bg-white rounded-xl border border-amber-200/80">
-        <h4 className="text-xs font-black text-amber-900 mb-2 flex items-center gap-1">
-          <BookOpen className="h-3.5 w-3.5 text-amber-700" /> ورد القرآن
-        </h4>
-        {selectedSurahIds.length === 0 ? (
-          <p className="text-[10px] text-slate-500">لم يحدد سور بورد القرآن بعد.</p>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-            {selectedSurahIds.map((sId) => {
-              const state = uData?.quranSurahState?.find((qs: any) => qs.surah_id === sId);
-              const name = surahName(sId);
-              const totalPages = totalPagesFor(sId);
-              const reached = state?.max_page_reached || state?.current_page || 0;
-              const pct = state?.is_completed || state?.percent_complete === 100
-                ? 100
-                : Math.min(100, Math.round((reached / totalPages) * 100));
-              return (
-                <div key={sId} className="p-2 bg-amber-50/50 rounded-lg border border-amber-100 flex items-center justify-between text-[11px]">
-                  <span className="font-bold text-slate-800">{name} ({reached}/{totalPages} ص)</span>
-                  <span className={`px-2 py-0.5 rounded text-[9px] font-black ${pct === 100 ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>
-                    {pct}%
-                  </span>
-                </div>
-              );
-            })}
+      {showAll && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-[10px]">
+          <div className="bg-white p-2 rounded-xl border border-amber-200 shadow-2xs">
+            <span className="text-amber-800 font-bold flex items-center justify-center gap-1">
+              <BookOpen className="h-3 w-3 text-amber-700" /> القرآن الكريم
+            </span>
+            <span className="font-black text-amber-700 text-xs tabular-nums">{s.quranPct}%</span>
           </div>
-        )}
-      </div>
-
-      {/* Athkar Details */}
-      <div className="p-3 bg-white rounded-xl border border-indigo-200/80">
-        <h4 className="text-xs font-black text-indigo-900 mb-2 flex items-center gap-1">
-          <Sparkles className="h-3.5 w-3.5 text-indigo-700" /> ورد الأذكار
-        </h4>
-        {thikrItemList.length === 0 ? (
-          <p className="text-[10px] text-slate-500">لم يضف أذكار بعد.</p>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-            {thikrItemList.map((item: any) => {
-              const target = item.target_count || 1;
-              let curr = item.completed_count || 0;
-              let isDone = item.completed || false;
-              if (uData?.thikrProgress && Array.isArray(uData.thikrProgress)) {
-                const prog = uData.thikrProgress.find((tp: any) => tp.thikr_item_id === item.id);
-                if (prog) {
-                  if (prog.current_count !== undefined) curr = prog.current_count;
-                  if (prog.completed !== undefined) isDone = prog.completed;
-                }
-              }
-              const pct = isDone || curr >= target ? 100 : Math.min(100, Math.round((curr / target) * 100));
-              const name = item.text || item.name || "ذِكر";
-              return (
-                <div key={item.id || name} className="p-2 bg-indigo-50/50 rounded-lg border border-indigo-100 flex items-center justify-between text-[11px]">
-                  <span className="font-bold text-slate-800 truncate">{name} ({curr}/{target})</span>
-                  <span className={`px-2 py-0.5 rounded text-[9px] font-black ${pct === 100 ? "bg-emerald-100 text-emerald-800" : "bg-indigo-100 text-indigo-800"}`}>
-                    {pct}%
-                  </span>
-                </div>
-              );
-            })}
+          <div className="bg-white p-2 rounded-xl border border-indigo-200 shadow-2xs">
+            <span className="text-indigo-800 font-bold flex items-center justify-center gap-1">
+              <TasbihIcon className="h-3 w-3 text-indigo-700" /> الأذكار اليومية
+            </span>
+            <span className="font-black text-indigo-700 text-xs tabular-nums">{s.athkarPct}%</span>
           </div>
-        )}
-      </div>
+          <div className="bg-white p-2 rounded-xl border border-emerald-200 shadow-2xs">
+            <span className="text-emerald-800 font-bold flex items-center justify-center gap-1">
+              <PrayerIcon className="h-3 w-3 text-emerald-700" /> التزام الصلاة
+            </span>
+            <span className="font-black text-emerald-700 text-xs tabular-nums">{s.prayerPct}%</span>
+          </div>
+          <div className="bg-white p-2 rounded-xl border border-purple-200 shadow-2xs">
+            <span className="text-purple-800 font-bold flex items-center justify-center gap-1">
+              <Award className="h-3 w-3 text-purple-700" /> الأخلاق والسنن
+            </span>
+            <span className="font-black text-purple-700 text-xs tabular-nums">{s.habitsPct}%</span>
+          </div>
+        </div>
+      )}
 
-      {/* Prayer Logs */}
-      <div className="p-3 bg-white rounded-xl border border-emerald-200/80">
-        <h4 className="text-xs font-black text-emerald-900 mb-2 flex items-center gap-1">
-          <Clock className="h-3.5 w-3.5 text-emerald-700" /> التزام الصلاة
-        </h4>
-        {prayerLogs.length > 0 ? (
-          <div className="space-y-1 text-[10px]">
-            {prayerLogs.slice(-5).reverse().map((pl: any, i: number) => {
-              const checked = ["fajr", "dhuhr", "asr", "maghrib", "isha"].filter((k) => pl[k]).length;
-              return (
-                <div key={i} className="flex items-center justify-between p-1.5 bg-emerald-50/40 rounded-lg border border-emerald-100">
-                  <span className="font-bold text-slate-700">{pl.date}</span>
-                  <div className="flex gap-1.5 font-bold">
-                    <span className={pl.fajr ? "text-emerald-700" : "text-slate-300"}>فجر</span>
-                    <span className={pl.dhuhr ? "text-emerald-700" : "text-slate-300"}>ظهر</span>
-                    <span className={pl.asr ? "text-emerald-700" : "text-slate-300"}>عصر</span>
-                    <span className={pl.maghrib ? "text-emerald-700" : "text-slate-300"}>مغرب</span>
-                    <span className={pl.isha ? "text-emerald-700" : "text-slate-300"}>عشاء</span>
+      {/* 1. Quran Daily Log Details */}
+      {(showAll || activeCategory === "quran") && (
+        <div className="p-3 bg-white rounded-xl border border-amber-200/80 space-y-2">
+          <div className="flex items-center justify-between pb-1 border-b border-amber-100">
+            <h4 className="text-xs font-black text-amber-900 flex items-center gap-1">
+              <BookOpen className="h-3.5 w-3.5 text-amber-700" /> ورد القرآن - المتابعة اليومية لكل يوم
+            </h4>
+            <span className="text-[10px] font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+              المعدل: {s.quranPct}%
+            </span>
+          </div>
+
+          {/* Surahs selected summary */}
+          {selectedSurahIds.length > 0 && (
+            <div className="p-2 bg-amber-50/60 rounded-lg border border-amber-100 text-[10px] space-y-1">
+              <span className="font-bold text-amber-900 block">السور المحددة بورد القرآن:</span>
+              <div className="flex flex-wrap gap-1">
+                {selectedSurahIds.map((sId) => {
+                  const state = uData?.quranSurahState?.find((qs: any) => qs.surah_id === sId);
+                  const name = surahName(sId);
+                  const totalPages = totalPagesFor(sId);
+                  const reached = state?.max_page_reached || state?.current_page || 0;
+                  const pct = state?.is_completed || state?.percent_complete === 100
+                    ? 100
+                    : Math.min(100, Math.round((reached / totalPages) * 100));
+                  return (
+                    <span key={sId} className="px-2 py-0.5 bg-white rounded border border-amber-200 font-bold text-slate-800">
+                      {name} ({reached}/{totalPages} ص) {pct === 100 ? "✓" : `${pct}%`}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Daily Reading Logs across dates */}
+          {displayDates.length > 0 ? (
+            <div className="space-y-1.5 text-[10px]">
+              {displayDates.map((dateStr) => {
+                const dayStats = getMemberStatsForDate(uData, dateStr);
+                const qLog = uData?.quranDailyReading?.find((q: any) => q.date === dateStr);
+                const isRead = qLog ? (qLog.completed || (qLog.pages_read || 0) > 0) : dayStats.quranPct > 0;
+                const pagesRead = qLog?.pages_read || 0;
+
+                return (
+                  <div key={dateStr} className="flex flex-wrap items-center justify-between p-2 bg-amber-50/40 rounded-lg border border-amber-100 gap-1.5">
+                    <span className="font-bold text-slate-800 dir-ltr">{dateStr}</span>
+                    <div className="flex items-center gap-1 font-bold">
+                      {isRead ? (
+                        <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 font-black">
+                          تمت قراءة الورد اليومي ✓ {pagesRead > 0 && `(${pagesRead} ص)`}
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-400">
+                          لم تتم قراءة ورد القرآن ✗
+                        </span>
+                      )}
+                    </div>
+                    <span className={`font-black text-[10px] bg-white px-2 py-0.5 rounded border ${isRead ? "text-emerald-800 border-emerald-200" : "text-amber-800 border-amber-200"}`}>
+                      {isRead ? "100%" : "0%"}
+                    </span>
                   </div>
-                  <span className="font-black text-emerald-800">{checked}/5</span>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <p className="text-[10px] text-slate-500">لا توجد سجلات صلاة مسجلة بعد.</p>
-        )}
-      </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-[10px] text-slate-500 font-medium">لم يتم تسجيل قراءة قرآن لأي يوم بعد.</p>
+          )}
+        </div>
+      )}
 
-      {/* Habits */}
-      <div className="p-3 bg-white rounded-xl border border-purple-200/80">
-        <h4 className="text-xs font-black text-purple-900 mb-2 flex items-center gap-1">
-          <Award className="h-3.5 w-3.5 text-purple-700" /> الأخلاق والسنن
-        </h4>
-        {customHabits.length > 0 ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-            {customHabits.map((h: any) => {
-              let isDone = false;
-              if (uData?.customHabitProgress && Array.isArray(uData.customHabitProgress)) {
-                const hp = uData.customHabitProgress.find((p: any) => p.habit_id === h.id);
-                if (hp && (hp.completed || (hp.count || 0) > 0)) isDone = true;
-              }
-              return (
-                <div key={h.id || h.name} className="p-2 bg-purple-50/50 rounded-lg border border-purple-100 flex items-center justify-between text-[11px]">
-                  <span className="font-bold text-slate-800">{h.name}</span>
-                  <span className={`px-2 py-0.5 rounded text-[9px] font-black ${isDone ? "bg-emerald-100 text-emerald-800" : "bg-purple-100 text-purple-800"}`}>
-                    {isDone ? "مكتمل ✓" : "0%"}
-                  </span>
-                </div>
-              );
-            })}
+      {/* 2. Athkar Daily Log Details */}
+      {(showAll || activeCategory === "athkar") && (
+        <div className="p-3 bg-white rounded-xl border border-indigo-200/80 space-y-2">
+          <div className="flex items-center justify-between pb-1 border-b border-indigo-100">
+            <h4 className="text-xs font-black text-indigo-900 flex items-center gap-1">
+              <TasbihIcon className="h-3.5 w-3.5 text-indigo-700" /> ورد الأذكار - المتابعة اليومية لكل يوم
+            </h4>
+            <span className="text-[10px] font-bold text-indigo-800 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+              المعدل: {s.athkarPct}%
+            </span>
           </div>
-        ) : (
-          <p className="text-[10px] text-slate-500">لا توجد أخصال مسجلة بعد.</p>
-        )}
-      </div>
+
+          {displayDates.length > 0 ? (
+            <div className="space-y-1.5 text-[10px]">
+              {displayDates.map((dateStr) => {
+                const dayStats = getMemberStatsForDate(uData, dateStr);
+                return (
+                  <div key={dateStr} className="flex flex-wrap items-center justify-between p-2 bg-indigo-50/40 rounded-lg border border-indigo-100 gap-1.5">
+                    <span className="font-bold text-slate-800 dir-ltr">{dateStr}</span>
+                    <div className="flex flex-wrap items-center gap-1 font-bold text-[10px]">
+                      {thikrItemList.length === 0 ? (
+                        <span className="text-slate-400">لا توجد أذكار مخصصة</span>
+                      ) : (
+                        thikrItemList.map((item: any) => {
+                          const target = item.target_count || 1;
+                          let curr = 0;
+                          let isDone = false;
+                          if (uData?.thikrProgress && Array.isArray(uData.thikrProgress)) {
+                            const prog = uData.thikrProgress.find((tp: any) => tp.thikr_item_id === item.id && tp.date === dateStr);
+                            if (prog) {
+                              curr = prog.current_count || 0;
+                              isDone = prog.completed || curr >= target;
+                            }
+                          }
+                          const name = item.text || item.name || "ذِكر";
+                          return (
+                            <span
+                              key={item.id || name}
+                              className={`px-1.5 py-0.5 rounded ${isDone ? "bg-indigo-100 text-indigo-950 font-black border border-indigo-200" : "bg-slate-100 text-slate-400"}`}
+                            >
+                              {name}: {curr}/{target} {isDone ? "✓" : "✗"}
+                            </span>
+                          );
+                        })
+                      )}
+                    </div>
+                    <span className="font-black text-indigo-800 text-[10px] bg-white px-2 py-0.5 rounded border border-indigo-200">
+                      {dayStats.athkarPct}%
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-[10px] text-slate-500 font-medium">لا توجد أذكار مسجلة لأي يوم بعد.</p>
+          )}
+        </div>
+      )}
+
+      {/* 3. Prayer Daily Log Details */}
+      {(showAll || activeCategory === "prayer") && (
+        <div className="p-3 bg-white rounded-xl border border-emerald-200/80 space-y-2">
+          <div className="flex items-center justify-between pb-1 border-b border-emerald-100">
+            <h4 className="text-xs font-black text-emerald-900 flex items-center gap-1">
+              <PrayerIcon className="h-3.5 w-3.5 text-emerald-700" /> التزام الصلاة على وقتها - المتابعة اليومية لكل يوم
+            </h4>
+            <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+              المعدل: {s.prayerPct}%
+            </span>
+          </div>
+
+          {displayDates.length > 0 ? (
+            <div className="space-y-1.5 text-[10px]">
+              {displayDates.map((dateStr) => {
+                const pl = uData?.prayerLogs?.find((p: any) => p.date === dateStr);
+                const checked = pl ? ["fajr", "dhuhr", "asr", "maghrib", "isha"].filter((k) => pl[k]).length : 0;
+                const dayPct = Math.round((checked / 5) * 100);
+
+                return (
+                  <div key={dateStr} className="flex flex-wrap items-center justify-between p-2 bg-emerald-50/50 rounded-lg border border-emerald-100 gap-1.5">
+                    <span className="font-bold text-slate-800 dir-ltr">{dateStr}</span>
+                    <div className="flex items-center gap-1 font-bold text-[10px]">
+                      <span className={`px-1.5 py-0.5 rounded ${pl?.fajr ? "bg-emerald-200 text-emerald-950 font-black" : "bg-slate-100 text-slate-400"}`}>فجر {pl?.fajr ? "✓" : "✗"}</span>
+                      <span className={`px-1.5 py-0.5 rounded ${pl?.dhuhr ? "bg-emerald-200 text-emerald-950 font-black" : "bg-slate-100 text-slate-400"}`}>ظهر {pl?.dhuhr ? "✓" : "✗"}</span>
+                      <span className={`px-1.5 py-0.5 rounded ${pl?.asr ? "bg-emerald-200 text-emerald-950 font-black" : "bg-slate-100 text-slate-400"}`}>عصر {pl?.asr ? "✓" : "✗"}</span>
+                      <span className={`px-1.5 py-0.5 rounded ${pl?.maghrib ? "bg-emerald-200 text-emerald-950 font-black" : "bg-slate-100 text-slate-400"}`}>مغرب {pl?.maghrib ? "✓" : "✗"}</span>
+                      <span className={`px-1.5 py-0.5 rounded ${pl?.isha ? "bg-emerald-200 text-emerald-950 font-black" : "bg-slate-100 text-slate-400"}`}>عشاء {pl?.isha ? "✓" : "✗"}</span>
+                    </div>
+                    <span className="font-black text-emerald-800 text-[10px] bg-white px-2 py-0.5 rounded border border-emerald-200">
+                      {dayPct}% ({checked}/5)
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-[10px] text-slate-500 font-medium">لا توجد سجلات صلاة مسجلة لهذا العضو بعد.</p>
+          )}
+        </div>
+      )}
+
+      {/* 4. Habits / Ethics Daily Log Details */}
+      {(showAll || activeCategory === "habits") && (
+        <div className="p-3 bg-white rounded-xl border border-purple-200/80 space-y-2">
+          <div className="flex items-center justify-between pb-1 border-b border-purple-100">
+            <h4 className="text-xs font-black text-purple-900 flex items-center gap-1">
+              <Award className="h-3.5 w-3.5 text-purple-700" /> الأخلاق والسنن - المتابعة اليومية لكل يوم
+            </h4>
+            <span className="text-[10px] font-bold text-purple-800 bg-purple-50 px-2 py-0.5 rounded border border-purple-200">
+              المعدل: {s.habitsPct}%
+            </span>
+          </div>
+
+          {displayDates.length > 0 ? (
+            <div className="space-y-1.5 text-[10px]">
+              {displayDates.map((dateStr) => {
+                const dayStats = getMemberStatsForDate(uData, dateStr);
+                return (
+                  <div key={dateStr} className="flex flex-wrap items-center justify-between p-2 bg-purple-50/40 rounded-lg border border-purple-100 gap-1.5">
+                    <span className="font-bold text-slate-800 dir-ltr">{dateStr}</span>
+                    <div className="flex flex-wrap items-center gap-1 font-bold text-[10px]">
+                      {customHabits.length === 0 ? (
+                        <span className="text-slate-400">لا توجد أخلاق مخصصة</span>
+                      ) : (
+                        customHabits.map((h: any) => {
+                          let isDone = false;
+                          if (uData?.customHabitProgress && Array.isArray(uData.customHabitProgress)) {
+                            const hp = uData.customHabitProgress.find((p: any) => p.habit_id === h.id && p.date === dateStr);
+                            if (hp && (hp.completed || (hp.count || 0) > 0)) isDone = true;
+                          }
+                          return (
+                            <span
+                              key={h.id || h.name}
+                              className={`px-1.5 py-0.5 rounded ${isDone ? "bg-purple-100 text-purple-950 font-black border border-purple-200" : "bg-slate-100 text-slate-400"}`}
+                            >
+                              {h.name}: {isDone ? "✓" : "✗"}
+                            </span>
+                          );
+                        })
+                      )}
+                    </div>
+                    <span className="font-black text-purple-800 text-[10px] bg-white px-2 py-0.5 rounded border border-purple-200">
+                      {dayStats.habitsPct}%
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-[10px] text-slate-500 font-medium">لم يتم إضافة أخلاق أو سنن بعد.</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -555,6 +769,7 @@ function AdminPage() {
   const [viewMode, setViewMode] = useState<"byDate" | "byMember">("byDate");
   const [onlySubmitted, setOnlySubmitted] = useState<boolean>(false);
   const [dateSortAsc, setDateSortAsc] = useState<boolean>(true);
+  const [memberSortMode, setMemberSortMode] = useState<"mostDays" | "quran" | "athkar" | "prayer" | "habits" | "name">("mostDays");
   const [showLeaderboard, setShowLeaderboard] = useState<boolean>(false);
   const [selectedLeaderboardMember, setSelectedLeaderboardMember] = useState<UserProfileDoc | null>(null);
 
@@ -596,7 +811,12 @@ function AdminPage() {
         return prevMap;
       });
     }, (err) => {
-      console.error("Error subscribing to users collection:", err);
+      const errStr = String(err?.message || err || "");
+      if (errStr.includes("resource-exhausted") || errStr.includes("quota")) {
+        setQuotaExceededCooldown(12);
+      } else {
+        console.error("Error subscribing to users collection:", err);
+      }
       setLoadingMembers(false);
     });
 
@@ -615,7 +835,12 @@ function AdminPage() {
         return updated;
       });
     }, (err) => {
-      console.error("Error subscribing to user_data collection:", err);
+      const errStr = String(err?.message || err || "");
+      if (errStr.includes("resource-exhausted") || errStr.includes("quota")) {
+        setQuotaExceededCooldown(12);
+      } else {
+        console.error("Error subscribing to user_data collection:", err);
+      }
     });
 
     // 3. Real-time listener for global_habits collection
@@ -626,7 +851,12 @@ function AdminPage() {
       });
       setGlobalHabits(list);
     }, (err) => {
-      console.error("Error subscribing to global_habits collection:", err);
+      const errStr = String(err?.message || err || "");
+      if (errStr.includes("resource-exhausted") || errStr.includes("quota")) {
+        setQuotaExceededCooldown(12);
+      } else {
+        console.error("Error subscribing to global_habits collection:", err);
+      }
     });
 
     // 4. Real-time listener for global_athkar collection
@@ -637,7 +867,12 @@ function AdminPage() {
       });
       setGlobalAthkar(list);
     }, (err) => {
-      console.error("Error subscribing to global_athkar collection:", err);
+      const errStr = String(err?.message || err || "");
+      if (errStr.includes("resource-exhausted") || errStr.includes("quota")) {
+        setQuotaExceededCooldown(12);
+      } else {
+        console.error("Error subscribing to global_athkar collection:", err);
+      }
     });
 
     return () => {
@@ -1299,29 +1534,44 @@ function AdminPage() {
             {/* 🏆 Leaderboard / Top Achievers of the Week (Only visible when toggled) */}
             {showLeaderboard && (() => {
               const uniqueDates = getUniqueSubmissionDates(members, userDataMap, dateSortAsc);
+              const totalDaysCount = Math.max(1, uniqueDates.length);
+
               const ranked = [...members]
                 .map((m) => {
                   const uData = getUserDataForMember(m, userDataMap);
-                  let countDays = 0;
-                  let sumAvg = 0;
-                  uniqueDates.forEach((d) => {
-                    if (hasMemberSubmittedOnDate(uData, d)) {
-                      countDays++;
-                      sumAvg += getMemberStatsForDate(uData, d).totalAvg;
-                    }
-                  });
-                  const score = countDays > 0 ? Math.round(sumAvg / countDays) : 0;
-                  return { member: m, uData, countDays, score };
+                  const stats = getOverallMemberStats(uData, uniqueDates);
+                  return {
+                    member: m,
+                    uData,
+                    countDays: stats.submittedDaysCount,
+                    score: stats.totalAvgPct,
+                  };
                 })
-                .sort((a, b) => b.score - a.score || b.countDays - a.countDays);
+                .sort((a, b) => b.score - a.score || b.countDays - a.countDays || (a.member.displayName || "").localeCompare(b.member.displayName || "", "ar"));
 
-              const topThree = ranked.slice(0, 3);
-              const medals = ["🥇 المركز الأول", "🥈 المركز الثاني", "🥉 المركز الثالث"];
-              const medalBgs = [
-                "bg-amber-100/90 border-amber-300 text-amber-950",
-                "bg-slate-100/90 border-slate-300 text-slate-900",
-                "bg-amber-200/50 border-amber-300 text-amber-900",
-              ];
+              let currentRank = 1;
+              const rankedWithPositions = ranked.map((item, idx, arr) => {
+                if (idx > 0 && item.score < arr[idx - 1].score) {
+                  currentRank = idx + 1;
+                }
+                let medalTitle = "";
+                let medalBg = "bg-white border-slate-200 text-slate-800";
+                if (currentRank === 1) {
+                  medalTitle = "🥇 المركز الأول";
+                  medalBg = "bg-amber-100/90 border-amber-300 text-amber-950";
+                } else if (currentRank === 2) {
+                  medalTitle = "🥈 المركز الثاني";
+                  medalBg = "bg-slate-100/90 border-slate-300 text-slate-900";
+                } else if (currentRank === 3) {
+                  medalTitle = "🥉 المركز الثالث";
+                  medalBg = "bg-amber-200/50 border-amber-300 text-amber-900";
+                } else {
+                  medalTitle = `المرتبة ${currentRank}`;
+                }
+                return { ...item, rank: currentRank, medalTitle, medalBg };
+              });
+
+              const topThree = rankedWithPositions.filter((item) => item.rank <= 3);
 
               return (
                 <div className="rounded-2xl border border-amber-300/80 bg-gradient-to-r from-amber-500/10 via-amber-100/30 to-yellow-500/10 p-4 shadow-2xs">
@@ -1336,7 +1586,7 @@ function AdminPage() {
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                    {topThree.map((item, idx) => {
+                    {topThree.map((item) => {
                       const isSelected = selectedLeaderboardMember?.uid === item.member.uid;
                       return (
                         <div
@@ -1352,14 +1602,14 @@ function AdminPage() {
                           className={`p-3 rounded-xl border flex items-center justify-between shadow-2xs cursor-pointer transition-all hover:scale-[1.01] ${
                             isSelected
                               ? "ring-2 ring-amber-500 border-amber-500 bg-amber-200/90"
-                              : medalBgs[idx] || "bg-white border-slate-200"
+                              : item.medalBg
                           }`}
                         >
                           <div>
-                            <span className="text-[10px] font-black block mb-0.5">{medals[idx]}</span>
+                            <span className="text-[10px] font-black block mb-0.5">{item.medalTitle}</span>
                             <span className="text-xs font-black">{item.member.displayName || "عضو"}</span>
                             <span className="text-[10px] opacity-80 block font-semibold mt-0.5">
-                              عَبّأت {item.countDays} أيّام • {isSelected ? "إخفاء التفاصيل ✖" : "عرض التفاصيل 🔍"}
+                              عَبّأت {item.countDays} / {totalDaysCount} أَيَّام
                             </span>
                           </div>
                           <span className="text-sm font-black text-emerald-800 bg-white/90 px-2.5 py-1 rounded-lg border border-slate-200 shadow-2xs">
@@ -1373,22 +1623,10 @@ function AdminPage() {
                   {/* Detailed breakdown for selected leaderboard member */}
                   {selectedLeaderboardMember && (
                     <div className="mt-4 p-3.5 bg-white rounded-2xl border border-amber-300 shadow-xs">
-                      <div className="flex items-center justify-between mb-2 pb-2 border-b border-amber-100">
-                        <h4 className="text-xs font-black text-slate-900 flex items-center gap-1.5">
-                          <span>تفاصيل وسجل إنجاز المتصدرة:</span>
-                          <span className="text-indigo-800 font-black">{selectedLeaderboardMember.displayName}</span>
-                        </h4>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedLeaderboardMember(null)}
-                          className="text-[10px] font-extrabold text-slate-600 hover:text-slate-900 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200 cursor-pointer"
-                        >
-                          إغلاق التفاصيل ✖
-                        </button>
-                      </div>
                       <MemberDetailView
                         member={selectedLeaderboardMember}
                         uData={getUserDataForMember(selectedLeaderboardMember, userDataMap)}
+                        uniqueDates={uniqueDates}
                       />
                     </div>
                   )}
@@ -1448,6 +1686,100 @@ function AdminPage() {
                   >
                     <span>{dateSortAsc ? "ترتيب: من بداية الأسبوع (السبت) ⬆️" : "ترتيب: الأحدث أولاً ⬇️"}</span>
                   </button>
+                )}
+
+                {/* Icon-Only Sort Controls for Members */}
+                {viewMode === "byMember" && (
+                  <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200 shadow-2xs">
+                    <span className="text-[10px] font-black text-slate-400 px-1 select-none hidden sm:inline">ترتيب:</span>
+                    
+                    {/* 1. Name / Alphabetical (First on the Right in RTL) */}
+                    <button
+                      type="button"
+                      onClick={() => setMemberSortMode("name")}
+                      title="ترتيب أبجدي حسب الاسم"
+                      className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                        memberSortMode === "name"
+                          ? "bg-amber-400 text-slate-950 font-black shadow-xs ring-1 ring-amber-500"
+                          : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                      }`}
+                    >
+                      <Users className="h-4 w-4" />
+                    </button>
+
+                    {/* 2. Max Days Count (Calendar icon with greater indicator) */}
+                    <button
+                      type="button"
+                      onClick={() => setMemberSortMode("mostDays")}
+                      title="الأكثر تعبئة للأيام"
+                      className={`p-1.5 rounded-lg transition-all cursor-pointer relative ${
+                        memberSortMode === "mostDays"
+                          ? "bg-amber-400 text-slate-950 font-black shadow-xs ring-1 ring-amber-500"
+                          : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                      }`}
+                    >
+                      <div className="relative flex items-center justify-center">
+                        <CalendarDays className="h-4 w-4" />
+                        <span className="absolute -top-1 -left-1 text-[8px] font-black leading-none bg-amber-200 text-amber-950 rounded-xs px-0.5 border border-amber-400">&gt;</span>
+                      </div>
+                    </button>
+
+                    {/* 3. Quran */}
+                    <button
+                      type="button"
+                      onClick={() => setMemberSortMode("quran")}
+                      title="الأعلى في القرآن الكريم"
+                      className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                        memberSortMode === "quran"
+                          ? "bg-amber-400 text-slate-950 font-black shadow-xs ring-1 ring-amber-500"
+                          : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                      }`}
+                    >
+                      <BookOpen className="h-4 w-4" />
+                    </button>
+
+                    {/* 4. Athkar */}
+                    <button
+                      type="button"
+                      onClick={() => setMemberSortMode("athkar")}
+                      title="الأعلى في الأذكار"
+                      className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                        memberSortMode === "athkar"
+                          ? "bg-amber-400 text-slate-950 font-black shadow-xs ring-1 ring-amber-500"
+                          : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                      }`}
+                    >
+                      <TasbihIcon className="h-4 w-4" />
+                    </button>
+
+                    {/* 5. Prayer */}
+                    <button
+                      type="button"
+                      onClick={() => setMemberSortMode("prayer")}
+                      title="الأعلى في الصلوات الخمس"
+                      className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                        memberSortMode === "prayer"
+                          ? "bg-amber-400 text-slate-950 font-black shadow-xs ring-1 ring-amber-500"
+                          : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                      }`}
+                    >
+                      <PrayerIcon className="h-4 w-4" />
+                    </button>
+
+                    {/* 6. Habits / Ethics */}
+                    <button
+                      type="button"
+                      onClick={() => setMemberSortMode("habits")}
+                      title="الأعلى في الأخلاق والسلوك"
+                      className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                        memberSortMode === "habits"
+                          ? "bg-amber-400 text-slate-950 font-black shadow-xs ring-1 ring-amber-500"
+                          : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                      }`}
+                    >
+                      <Award className="h-4 w-4" />
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
@@ -1625,13 +1957,75 @@ function AdminPage() {
             {viewMode === "byMember" && (
               <div className="space-y-2">
                 {[...members]
-                  .sort((a, b) => (a.displayName || "").localeCompare(b.displayName || "", "ar"))
+                  .sort((a, b) => {
+                    const uDataA = getUserDataForMember(a, userDataMap);
+                    const uDataB = getUserDataForMember(b, userDataMap);
+                    const uniqueDates = getUniqueSubmissionDates(members, userDataMap, dateSortAsc);
+
+                    if (memberSortMode === "mostDays") {
+                      const daysA = uniqueDates.filter((d) => hasMemberSubmittedOnDate(uDataA, d)).length;
+                      const daysB = uniqueDates.filter((d) => hasMemberSubmittedOnDate(uDataB, d)).length;
+                      if (daysB !== daysA) return daysB - daysA;
+                    } else if (memberSortMode === "quran") {
+                      const statsA = getOverallMemberStats(uDataA, uniqueDates);
+                      const statsB = getOverallMemberStats(uDataB, uniqueDates);
+                      if (statsB.quranPct !== statsA.quranPct) return statsB.quranPct - statsA.quranPct;
+                      if (statsB.submittedDaysCount !== statsA.submittedDaysCount) return statsB.submittedDaysCount - statsA.submittedDaysCount;
+                    } else if (memberSortMode === "athkar") {
+                      const statsA = getOverallMemberStats(uDataA, uniqueDates);
+                      const statsB = getOverallMemberStats(uDataB, uniqueDates);
+                      if (statsB.athkarPct !== statsA.athkarPct) return statsB.athkarPct - statsA.athkarPct;
+                      if (statsB.submittedDaysCount !== statsA.submittedDaysCount) return statsB.submittedDaysCount - statsA.submittedDaysCount;
+                    } else if (memberSortMode === "prayer") {
+                      const statsA = getOverallMemberStats(uDataA, uniqueDates);
+                      const statsB = getOverallMemberStats(uDataB, uniqueDates);
+                      if (statsB.prayerPct !== statsA.prayerPct) return statsB.prayerPct - statsA.prayerPct;
+                      if (statsB.submittedDaysCount !== statsA.submittedDaysCount) return statsB.submittedDaysCount - statsA.submittedDaysCount;
+                    } else if (memberSortMode === "habits") {
+                      const statsA = getOverallMemberStats(uDataA, uniqueDates);
+                      const statsB = getOverallMemberStats(uDataB, uniqueDates);
+                      if (statsB.habitsPct !== statsA.habitsPct) return statsB.habitsPct - statsA.habitsPct;
+                      if (statsB.submittedDaysCount !== statsA.submittedDaysCount) return statsB.submittedDaysCount - statsA.submittedDaysCount;
+                    }
+
+                    return (a.displayName || "").localeCompare(b.displayName || "", "ar");
+                  })
                   .map((m, idx) => {
                     const uData = getUserDataForMember(m, userDataMap);
                     const isSelected = selectedUser?.uid === m.uid;
                     const uniqueDates = getUniqueSubmissionDates(members, userDataMap, dateSortAsc);
                     const activeDaysCount = uniqueDates.filter((d) => hasMemberSubmittedOnDate(uData, d)).length;
+                    const overallStats = getOverallMemberStats(uData, uniqueDates);
                     const memberNumber = idx + 1;
+
+                    let badgeElement: React.ReactNode = (
+                      <span>
+                        المعدل العام {overallStats.totalAvgPct}% (تعبئة {activeDaysCount} / {uniqueDates.length} أَيَّام)
+                      </span>
+                    );
+                    let badgeClass = getPctBadgeClass(overallStats.totalAvgPct);
+
+                    if (memberSortMode === "mostDays") {
+                      const activePct = Math.round((activeDaysCount / Math.max(1, uniqueDates.length)) * 100);
+                      badgeElement = (
+                        <span>
+                          عَبّأت {activeDaysCount} / {uniqueDates.length} أَيَّام
+                        </span>
+                      );
+                      badgeClass = getPctBadgeClass(activePct);
+                    } else if (memberSortMode === "quran") {
+                      badgeElement = <span>📖 القرآن {overallStats.quranPct}%</span>;
+                      badgeClass = getPctBadgeClass(overallStats.quranPct);
+                    } else if (memberSortMode === "athkar") {
+                      badgeElement = <span>📿 الأذكار {overallStats.athkarPct}%</span>;
+                      badgeClass = getPctBadgeClass(overallStats.athkarPct);
+                    } else if (memberSortMode === "prayer") {
+                      badgeElement = <span>🕌 الصلاة {overallStats.prayerPct}%</span>;
+                      badgeClass = getPctBadgeClass(overallStats.prayerPct);
+                    } else if (memberSortMode === "habits") {
+                      badgeElement = <span>🌸 الأخلاق {overallStats.habitsPct}%</span>;
+                      badgeClass = getPctBadgeClass(overallStats.habitsPct);
+                    }
 
                     return (
                       <div key={m.uid} className="flex flex-col">
@@ -1668,8 +2062,8 @@ function AdminPage() {
                           </div>
 
                           <div className="flex items-center gap-2 shrink-0">
-                            <span className="px-2.5 py-1 text-[11px] font-black rounded-lg bg-emerald-100 text-emerald-950 border border-emerald-200 shadow-2xs">
-                              عَبّأت {activeDaysCount} أيّام
+                            <span className={`px-2.5 py-1 text-[11px] font-black rounded-lg border ${badgeClass}`}>
+                              {badgeElement}
                             </span>
                             <button
                               type="button"
@@ -1687,23 +2081,8 @@ function AdminPage() {
 
                         {/* Collapsible Member Detailed View directly beneath this row */}
                         {isSelected && (
-                          <div className="mt-2 mb-2 p-4 bg-white rounded-2xl border border-amber-300 shadow-xs animate-in fade-in duration-150">
-                            <div className="flex items-center justify-between mb-3 pb-2 border-b border-amber-100">
-                              <h4 className="text-xs font-black text-slate-900">
-                                سجل وتفاصيل تعبئة العضو: <span className="text-indigo-800">{m.displayName}</span>
-                              </h4>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSelectedUser(null);
-                                }}
-                                className="text-[10px] font-bold text-slate-500 hover:text-slate-800 bg-slate-100 px-2 py-0.5 rounded-lg border border-slate-200 cursor-pointer"
-                              >
-                                إغلاق التفاصيل ✖
-                              </button>
-                            </div>
-                            <MemberDetailView member={m} uData={uData} />
+                          <div className="mt-2 mb-2 p-2 bg-white rounded-2xl border border-amber-300 shadow-xs animate-in fade-in duration-150 relative">
+                            <MemberDetailView member={m} uData={uData} activeCategory={memberSortMode} uniqueDates={uniqueDates} />
                           </div>
                         )}
                       </div>
@@ -1714,274 +2093,6 @@ function AdminPage() {
           </div>
         )}
       </section>
-
-      {/* Selected Member Detailed Log View Modal / Drawer */}
-      {selectedUser && (
-        <div className="rounded-3xl border border-amber-300 bg-white p-6 shadow-xl relative animate-in zoom-in-95 duration-200">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 rounded-2xl bg-amber-100 text-amber-900 font-black text-base border border-amber-200">
-                {(selectedUser.displayName || "م")[0]}
-              </div>
-              <div>
-                <span className="text-[10px] font-bold text-amber-700 block">تفاصيل وتعبئة العضو بالتفصيل 📜</span>
-                <h2 className="text-xl font-black text-slate-900">{selectedUser.displayName}</h2>
-                <span className="text-xs text-slate-500 font-medium dir-ltr text-right block">{selectedUser.email}</span>
-              </div>
-            </div>
-
-            <button
-              onClick={() => setSelectedUser(null)}
-              className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold cursor-pointer transition-colors"
-            >
-              إغلاق ✖
-            </button>
-          </div>
-
-          {fetchingData ? (
-            <p className="text-center text-xs text-slate-500 py-8 font-bold animate-pulse">جاري جلب كافة السجلات السحابية للعضو...</p>
-          ) : !getUserDataForMember(selectedUser, userDataMap) ? (
-            <p className="text-center text-xs text-slate-400 py-8 font-bold">لم يقم هذا العضو برفع سجلاته للسحابة بعد.</p>
-          ) : (
-            <div className="space-y-4">
-              {/* Overall Commitment Summary Banner */}
-              {(() => {
-                const selectedData = getUserDataForMember(selectedUser, userDataMap);
-                const s = getMemberStats(selectedData);
-                return (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 p-3 rounded-2xl bg-slate-50 border border-slate-200/80 text-center">
-                    <div>
-                      <span className="text-[10px] font-bold text-slate-500 block">ورد القرآن الكريم</span>
-                      <span className="text-base font-black text-amber-600 tabular-nums">{s.quranPct}%</span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-bold text-slate-500 block">ورد الأذكار</span>
-                      <span className="text-base font-black text-indigo-600 tabular-nums">{s.athkarPct}%</span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-bold text-slate-500 block">نسبة التزام الصلاة</span>
-                      <span className="text-base font-black text-emerald-600 tabular-nums">{s.prayerPct}%</span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-bold text-slate-500 block">الأخلاق والسنن</span>
-                      <span className="text-base font-black text-purple-600 tabular-nums">{s.habitsPct}%</span>
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* 1. Quran Log Details */}
-              {(() => {
-                const selectedData = getUserDataForMember(selectedUser, userDataMap);
-                let selectedSurahIds: number[] = [];
-                if (selectedData?.dailyQuranSelection && Array.isArray(selectedData.dailyQuranSelection) && selectedData.dailyQuranSelection.length > 0) {
-                  const sorted = [...selectedData.dailyQuranSelection].reverse();
-                  for (const sel of sorted) {
-                    if (sel.surah_ids && Array.isArray(sel.surah_ids) && sel.surah_ids.length > 0) {
-                      selectedSurahIds = sel.surah_ids;
-                      break;
-                    }
-                  }
-                }
-                if (selectedSurahIds.length === 0 && selectedData?.quranSurahState && Array.isArray(selectedData.quranSurahState)) {
-                  selectedSurahIds = selectedData.quranSurahState.map((s: any) => s.surah_id).filter(Boolean);
-                }
-
-                return (
-                  <div className="p-4 rounded-2xl bg-amber-50/60 border border-amber-200">
-                    <h3 className="text-xs font-black text-amber-900 flex items-center gap-1.5 mb-2.5">
-                      <BookOpen className="h-4 w-4 text-amber-700" /> تفاصيل ورد القرآن الكريم
-                    </h3>
-                    {selectedSurahIds.length === 0 ? (
-                      <p className="text-[11px] text-slate-500 font-medium">لم يتم تحديد أي سور بورد القرآن بعد (0%).</p>
-                    ) : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                        {selectedSurahIds.map((sId) => {
-                          const state = selectedData?.quranSurahState?.find((qs: any) => qs.surah_id === sId);
-                          const name = surahName(sId);
-                          const totalPages = totalPagesFor(sId);
-                          const reached = state?.max_page_reached || state?.current_page || 0;
-                          const pct = state?.is_completed || state?.percent_complete === 100
-                            ? 100
-                            : Math.min(100, Math.round((reached / totalPages) * 100));
-
-                          return (
-                            <div key={sId} className="bg-white p-3 rounded-xl border border-amber-200 flex flex-col gap-1.5 shadow-2xs">
-                              <div className="flex items-center justify-between">
-                                <span className="font-extrabold text-slate-900">{name}</span>
-                                <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black ${pct === 100 ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>
-                                  {pct === 100 ? "مكتملة ✓ 100%" : `${pct}%`}
-                                </span>
-                              </div>
-                              <div className="flex items-center justify-between text-[10px] text-slate-500 font-bold">
-                                <span>الصفحات: {reached} / {totalPages} صفحة</span>
-                              </div>
-                              <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                                <div
-                                  className={`h-full transition-all ${pct === 100 ? "bg-emerald-500" : "bg-amber-500"}`}
-                                  style={{ width: `${pct}%` }}
-                                />
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
-
-              {/* 2. Athkar Log Details */}
-              <div className="p-4 rounded-2xl bg-indigo-50/60 border border-indigo-200">
-                <h3 className="text-xs font-black text-indigo-900 flex items-center gap-1.5 mb-2.5">
-                  <Sparkles className="h-4 w-4 text-indigo-700" /> تفاصيل ورد الأذكار اليومية
-                </h3>
-                {(() => {
-                  const uData = getUserDataForMember(selectedUser, userDataMap);
-                  const itemList = uData?.thikrItems || [];
-
-                  if (itemList.length === 0) {
-                    return <p className="text-[11px] text-slate-500 font-medium">لم يتم إضافة أذكار لورده اليومي بعد (0%).</p>;
-                  }
-
-                  return (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                      {itemList.map((item: any) => {
-                        const target = item.target_count || 1;
-                        let curr = item.completed_count || 0;
-                        let isDone = item.completed || false;
-
-                        if (uData?.thikrProgress && Array.isArray(uData.thikrProgress)) {
-                          const prog = uData.thikrProgress.find((tp: any) => tp.thikr_item_id === item.id);
-                          if (prog) {
-                            if (prog.current_count !== undefined) curr = prog.current_count;
-                            if (prog.completed !== undefined) isDone = prog.completed;
-                          }
-                        }
-
-                        const pct = isDone || curr >= target ? 100 : Math.min(100, Math.round((curr / target) * 100));
-                        const name = item.text || item.name || "ذِكر";
-
-                        return (
-                          <div key={item.id || name} className="bg-white p-3 rounded-xl border border-indigo-100 flex flex-col gap-1.5 shadow-2xs">
-                            <div className="flex items-center justify-between">
-                              <span className="font-extrabold text-slate-800 truncate">{name}</span>
-                              <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black ${pct === 100 ? "bg-emerald-100 text-emerald-800" : "bg-indigo-100 text-indigo-800"}`}>
-                                {pct === 100 ? "مكتمل ✓ 100%" : `${pct}%`}
-                              </span>
-                            </div>
-                            <div className="flex items-center justify-between text-[10px] text-slate-500 font-bold">
-                              <span>العدد: {curr} / {target}</span>
-                            </div>
-                            <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                              <div
-                                className={`h-full transition-all ${pct === 100 ? "bg-emerald-500" : "bg-indigo-500"}`}
-                                style={{ width: `${pct}%` }}
-                              />
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })()}
-              </div>
-
-              {/* 3. Prayers Log Details */}
-              {(() => {
-                const selectedData = getUserDataForMember(selectedUser, userDataMap);
-                return (
-                  <div className="p-4 rounded-2xl bg-emerald-50/60 border border-emerald-200">
-                    <h3 className="text-xs font-black text-emerald-900 flex items-center gap-1.5 mb-2.5">
-                      <Clock className="h-4 w-4 text-emerald-700" /> تفاصيل التزام الصلاة على وقتها
-                    </h3>
-                    {selectedData?.prayerLogs?.length ? (
-                      <div className="space-y-1.5 text-[11px]">
-                        {selectedData.prayerLogs.slice(-14).reverse().map((pl: any, i: number) => {
-                          const doneCount = ["fajr", "dhuhr", "asr", "maghrib", "isha"].filter((k) => pl[k]).length;
-                          const dayPct = Math.round((doneCount / 5) * 100);
-                          return (
-                            <div key={i} className="bg-white p-2.5 rounded-xl border border-emerald-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
-                              <span className="font-bold text-slate-800">{pl.date}</span>
-                              <div className="flex items-center gap-1.5 text-[10px]">
-                                <span className={`px-2 py-0.5 rounded-md font-bold ${pl.fajr ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-400"}`}>الفجر {pl.fajr ? "✓" : "✗"}</span>
-                                <span className={`px-2 py-0.5 rounded-md font-bold ${pl.dhuhr ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-400"}`}>الظهر {pl.dhuhr ? "✓" : "✗"}</span>
-                                <span className={`px-2 py-0.5 rounded-md font-bold ${pl.asr ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-400"}`}>العصر {pl.asr ? "✓" : "✗"}</span>
-                                <span className={`px-2 py-0.5 rounded-md font-bold ${pl.maghrib ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-400"}`}>المغرب {pl.maghrib ? "✓" : "✗"}</span>
-                                <span className={`px-2 py-0.5 rounded-md font-bold ${pl.isha ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-400"}`}>العشاء {pl.isha ? "✓" : "✗"}</span>
-                              </div>
-                              <span className="font-black text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-200 text-[10px]">
-                                {dayPct}% ({doneCount} / 5)
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <p className="text-[11px] text-slate-500 font-medium">لا توجد سجلات صلاة مسجلة بعد (0%).</p>
-                    )}
-                  </div>
-                );
-              })()}
-
-              {/* 4. Ethics / Habits Details */}
-              <div className="p-4 rounded-2xl bg-purple-50/60 border border-purple-200">
-                <h3 className="text-xs font-black text-purple-900 flex items-center gap-1.5 mb-2.5">
-                  <Award className="h-4 w-4 text-purple-700" /> تفاصيل الأخلاق والسنن
-                </h3>
-                {(() => {
-                  const uData = getUserDataForMember(selectedUser, userDataMap);
-                  const customHabits = uData?.customHabits || [];
-
-                  if (customHabits.length === 0 && (!uData?.progressRows || uData.progressRows.length === 0)) {
-                    return <p className="text-[11px] text-slate-500 font-medium">لم يتم إضافة أي خصال أو أخلاق بعد (0%).</p>;
-                  }
-
-                  if (customHabits.length > 0) {
-                    return (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                        {customHabits.map((h: any) => {
-                          let isDone = false;
-                          if (uData?.customHabitProgress && Array.isArray(uData.customHabitProgress)) {
-                            const hp = uData.customHabitProgress.find((p: any) => p.habit_id === h.id);
-                            if (hp && (hp.completed || (hp.count || 0) > 0)) {
-                              isDone = true;
-                            }
-                          }
-
-                          return (
-                            <div key={h.id || h.name} className="bg-white p-3 rounded-xl border border-purple-100 flex items-center justify-between shadow-2xs">
-                              <div>
-                                <span className="font-extrabold text-slate-800 block">{h.name}</span>
-                                <span className="text-[10px] text-slate-400 font-medium">
-                                  {h.duration_type === "weekly" ? "أسبوعي" : h.duration_type === "monthly" ? "شهري" : "يومي"}
-                                </span>
-                              </div>
-                              <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black ${isDone ? "bg-emerald-100 text-emerald-800" : "bg-purple-100 text-purple-800"}`}>
-                                {isDone ? "مكتمل ✓ 100%" : "قيد المتابعة 0%"}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    );
-                  }
-
-                  return (
-                    <div className="flex flex-wrap gap-2 text-xs">
-                      {uData?.progressRows?.slice(-15).map((r: any, i: number) => (
-                        <div key={i} className="bg-white px-3 py-1.5 rounded-xl border border-purple-200 font-bold text-slate-700 shadow-2xs">
-                          🌸 {r.date}: خُلق مكتمل {r.is_completed || r.completed ? "✓ 100%" : "0%"}
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
 
       {/* Edit Global Habit Modal */}
       {editingHabit && (
