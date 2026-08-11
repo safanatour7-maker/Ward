@@ -57,18 +57,20 @@ export async function pushLocalToCloudDirect(userId: string): Promise<boolean> {
       }
     }
 
-    const dataPayload = {
-      thikrItems,
-      thikrGroups,
-      thikrProgress,
-      customHabits,
-      customHabitProgress,
-      quranDailyReading,
-      quranSurahState,
-      dailyQuranSelection,
-      prayerLogs,
-      updatedAt: new Date().toISOString(),
-    };
+    const dataPayload = JSON.parse(
+      JSON.stringify({
+        thikrItems,
+        thikrGroups,
+        thikrProgress,
+        customHabits,
+        customHabitProgress,
+        quranDailyReading,
+        quranSurahState,
+        dailyQuranSelection,
+        prayerLogs,
+        updatedAt: new Date().toISOString(),
+      })
+    );
 
     // Primary write: user_data document for user
     const userDataRef = doc(dbFirestore, "user_data", userId);
@@ -270,36 +272,52 @@ function mergeDailyQuranSelectionList(local: DailyQuranSelection[], cloud: Daily
 }
 
 function mergeGenericItems<T extends { id?: number; global_id?: string; name?: string }>(local: T[], cloud: T[]): T[] {
-  const cloudByGlobalId = new Map<string, T>();
-  const cloudByName = new Map<string, T>();
+  const localByGlobalId = new Map<string, T>();
+  const localByName = new Map<string, T>();
 
-  const resultList: T[] = [];
-
-  cloud.forEach((item) => {
-    const copy = { ...item };
-    delete copy.id;
-    if (copy.global_id) cloudByGlobalId.set(copy.global_id, copy);
-    if (copy.name) cloudByName.set(copy.name.trim().toLowerCase(), copy);
-    resultList.push(copy);
+  local.forEach((item) => {
+    if (item.global_id) localByGlobalId.set(item.global_id, item);
+    if (item.name) localByName.set(item.name.trim().toLowerCase(), item);
   });
 
-  local.forEach((localItem) => {
-    const matched =
-      (localItem.global_id ? cloudByGlobalId.get(localItem.global_id) : null) ||
-      (localItem.name ? cloudByName.get(localItem.name.trim().toLowerCase()) : null);
+  const resultMap = new Map<string | number, T>();
+  const newCloudItems: T[] = [];
 
-    if (!matched) {
-      const copy = { ...localItem };
-      delete copy.id;
-      resultList.push(copy);
+  cloud.forEach((cloudItem) => {
+    const matchedLocal =
+      (cloudItem.global_id ? localByGlobalId.get(cloudItem.global_id) : null) ||
+      (cloudItem.name ? localByName.get(cloudItem.name.trim().toLowerCase()) : null);
+
+    if (matchedLocal) {
+      const merged: T = {
+        ...cloudItem,
+        ...matchedLocal,
+        id: matchedLocal.id,
+        global_id: matchedLocal.global_id || cloudItem.global_id,
+      };
+      if (merged.id != null) resultMap.set(merged.id, merged);
+      else if (merged.global_id) resultMap.set(merged.global_id, merged);
+      else if (merged.name) resultMap.set(merged.name.trim().toLowerCase(), merged);
     } else {
-      const copy = { ...localItem };
+      const copy = { ...cloudItem };
       delete copy.id;
-      Object.assign(matched, copy);
+      newCloudItems.push(copy);
     }
   });
 
-  return resultList;
+  local.forEach((localItem) => {
+    const isAlreadyInResult =
+      (localItem.id != null && resultMap.has(localItem.id)) ||
+      (localItem.global_id && Array.from(resultMap.values()).some((r) => r.global_id === localItem.global_id)) ||
+      (localItem.name && Array.from(resultMap.values()).some((r) => r.name?.trim().toLowerCase() === localItem.name?.trim().toLowerCase()));
+
+    if (!isAlreadyInResult) {
+      const key = localItem.id ?? localItem.global_id ?? localItem.name;
+      if (key != null) resultMap.set(key, { ...localItem });
+    }
+  });
+
+  return [...Array.from(resultMap.values()), ...newCloudItems];
 }
 
 export async function pullCloudToLocal(userId: string): Promise<boolean> {

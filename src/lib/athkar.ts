@@ -145,14 +145,19 @@ export async function listGroups(): Promise<ThikrGroup[]> {
 export async function createGroup(name: string): Promise<number> {
   const clean = name.trim();
   if (!clean) throw new Error("اسم المجموعة فارغ");
-  return (await db.thikr_groups.add({
+  const groupId = "group_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7);
+  const id = (await db.thikr_groups.add({
+    global_id: groupId,
     name: clean,
     created_at: new Date().toISOString(),
   })) as number;
+  autoCloudSync();
+  return id;
 }
 
 export async function renameGroup(id: number, name: string) {
   await db.thikr_groups.update(id, { name: name.trim() });
+  autoCloudSync();
 }
 
 export async function deleteGroup(id: number) {
@@ -164,6 +169,7 @@ export async function deleteGroup(id: number) {
     }
     await db.thikr_groups.delete(id);
   });
+  autoCloudSync();
 }
 
 /** ---------- Items ---------- */
@@ -180,12 +186,16 @@ export async function createItem(input: {
   const clean = input.name.trim();
   if (!clean) throw new Error("اسم الذكر فارغ");
   const target = Math.max(1, Math.floor(input.target_count || 1));
-  return (await db.thikr_items.add({
+  const globalId = "thikr_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7);
+  const id = (await db.thikr_items.add({
+    global_id: globalId,
     name: clean,
     target_count: target,
     group_id: input.group_id,
     created_at: new Date().toISOString(),
   })) as number;
+  autoCloudSync();
+  return id;
 }
 
 export async function updateItem(
@@ -193,6 +203,7 @@ export async function updateItem(
   patch: Partial<Pick<ThikrItem, "name" | "target_count" | "group_id">>,
 ) {
   await db.thikr_items.update(id, patch);
+  autoCloudSync();
 }
 
 export async function deleteItem(id: number) {
@@ -200,6 +211,7 @@ export async function deleteItem(id: number) {
     await db.thikr_progress.where("thikr_item_id").equals(id).delete();
     await db.thikr_items.delete(id);
   });
+  autoCloudSync();
 }
 
 /** ---------- Daily progress ---------- */

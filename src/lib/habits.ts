@@ -187,7 +187,9 @@ export async function createHabit(input: {
   if (!cleanName) throw new Error("اسم الخُلق أو الفعل فارغ");
 
   const today = input.start_date || isoDate();
-  return (await db.custom_habits.add({
+  const globalId = "habit_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7);
+  const id = (await db.custom_habits.add({
+    global_id: globalId,
     name: cleanName,
     description: input.description?.trim(),
     tracking_type: input.tracking_type,
@@ -199,6 +201,8 @@ export async function createHabit(input: {
     created_at: new Date().toISOString(),
     flower_type: input.flower_type ?? "tulip",
   })) as number;
+  autoCloudSync();
+  return id;
 }
 
 function parseLocalDate(dateStr: string): Date {
@@ -224,6 +228,7 @@ export async function updateHabit(id: number, patch: Partial<CustomHabit>) {
     if (!patch.name) throw new Error("اسم الخُلق أو الفعل فارغ");
   }
   await db.custom_habits.update(id, patch);
+  autoCloudSync();
 }
 
 export async function deleteHabit(id: number) {
@@ -232,6 +237,7 @@ export async function deleteHabit(id: number) {
     await db.custom_habit_weekly_evaluation.where("habit_id").equals(id).delete();
     await db.custom_habits.delete(id);
   });
+  autoCloudSync();
 }
 
 /** ---------- Daily Progress ---------- */

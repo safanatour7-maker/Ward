@@ -1,8 +1,8 @@
 import { useLiveQuery } from "dexie-react-hooks";
 import { useEffect, useState } from "react";
 import { db } from "@/lib/db";
-import { arabicMonthYear, AR_WEEKDAYS, isoDate, startOfWeek } from "@/lib/date-utils";
-import { dayFillRatio } from "@/lib/quran-progress";
+import { arabicMonthYear, AR_WEEKDAYS, isoDate, startOfWeek, parseIsoDateString } from "@/lib/date-utils";
+import { dayFillRatio, getDailySelection } from "@/lib/quran-progress";
 import { surahName, totalPagesFor } from "@/lib/quran-text";
 import { ChevronRight, ChevronLeft, Calendar as CalendarIcon } from "lucide-react";
 
@@ -31,7 +31,7 @@ export function MonthCalendar({
     }
   };
 
-  const now = new Date(selectedDate);
+  const now = parseIsoDateString(selectedDate);
   const year = now.getFullYear();
   const month = now.getMonth();
   const firstOfMonth = new Date(year, month, 1);
@@ -94,8 +94,7 @@ export function MonthCalendar({
   // Use useLiveQuery to load active surahs for that date
   const editSelection = useLiveQuery(async () => {
     if (!editingDate) return null;
-    const selectionForDate = await db.daily_quran_selection.where("date").equals(editingDate).first();
-    const surahIds = selectionForDate?.surah_ids ?? [];
+    const surahIds = await getDailySelection(editingDate);
     
     const items = [];
     for (const sid of surahIds) {

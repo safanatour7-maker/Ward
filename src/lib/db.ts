@@ -35,6 +35,7 @@ export interface SurahPagesReference {
 
 export interface ThikrGroup {
   id?: number;
+  global_id?: string;
   name: string;
   created_at: string;
 }
