@@ -27,7 +27,7 @@ import {
   pickWisdomForHabits,
   isHabitActiveOnDate,
 } from "@/lib/habits";
-import { isoDate, startOfWeek, endOfWeek, weekDays, formatArabicDate } from "@/lib/date-utils";
+import { isoDate, startOfWeek, endOfWeek, weekDays, formatArabicDate, parseIsoDateString } from "@/lib/date-utils";
 
 const habitsSearchSchema = z.object({
   date: z.string().optional(),
@@ -93,7 +93,7 @@ function HabitsScreen() {
 
   // Dates of the current week containing the selected date (Saturday to Friday)
   const currentWeekDays = useMemo(() => {
-    return weekDays(new Date(selectedDate));
+    return weekDays(parseIsoDateString(selectedDate));
   }, [selectedDate]);
 
   async function loadData() {
@@ -116,7 +116,7 @@ function HabitsScreen() {
         newProgressMaps.set(h.id, pMap);
 
         // Load weekly status
-        const status = await getHabitWeeklyStatus(h.id, new Date(selectedDate));
+        const status = await getHabitWeeklyStatus(h.id, parseIsoDateString(selectedDate));
         newWeeklyStatuses.set(h.id, status);
       }
     }
@@ -131,8 +131,8 @@ function HabitsScreen() {
 
   // Helper to calculate remaining days
   function getRemainingDays(h: CustomHabit): number {
-    const today = new Date(isoDate());
-    const start = new Date(h.start_date);
+    const today = parseIsoDateString(isoDate());
+    const start = parseIsoDateString(h.start_date || isoDate());
     let limitDays = 7;
     if (h.duration_type === "month") limitDays = 30;
     else if (h.duration_type === "custom") limitDays = h.duration_days;
@@ -178,7 +178,7 @@ function HabitsScreen() {
       <header className="pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-extrabold">
-            {selectedDate === isoDate() ? "الأخلاق والأفعال" : `إنجازك في يوم: ${formatArabicDate(new Date(selectedDate))}`}
+            {selectedDate === isoDate() ? "الأخلاق والأفعال" : `إنجازك في يوم: ${formatArabicDate(parseIsoDateString(selectedDate))}`}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             تتبّع خِصالك الحسنة بلطف عبر الوردة الأسبوعية.

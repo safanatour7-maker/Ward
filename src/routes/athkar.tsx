@@ -23,7 +23,7 @@ import {
   type WeeklyStats,
 } from "@/lib/athkar";
 import { TasbihCounter } from "@/components/TasbihCounter";
-import { isoDate, weekDays, arabicMonthYear, formatArabicDate } from "@/lib/date-utils";
+import { isoDate, weekDays, arabicMonthYear, formatArabicDate, parseIsoDateString } from "@/lib/date-utils";
 import { MiniFlower } from "@/components/MiniFlower";
 
 const athkarSearchSchema = z.object({
@@ -206,7 +206,7 @@ function AthkarScreen() {
       <header className="pb-4 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-extrabold">
-            {selectedDate === today ? "ورد الأذكار" : `إنجازك في يوم: ${formatArabicDate(new Date(selectedDate))}`}
+            {selectedDate === today ? "ورد الأذكار" : `إنجازك في يوم: ${formatArabicDate(parseIsoDateString(selectedDate))}`}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             سبّح بلطف، وداوم ولو قَلّ.
@@ -249,7 +249,7 @@ function AthkarScreen() {
                 <button
                   type="button"
                   onClick={() => {
-                    const cur = new Date(selectedDate);
+                    const cur = parseIsoDateString(selectedDate);
                     cur.setMonth(cur.getMonth() - 1, 1);
                     setSelectedDate(isoDate(cur));
                   }}
@@ -259,12 +259,12 @@ function AthkarScreen() {
                   <ChevronRight className="h-4 w-4" />
                 </button>
                 <span className="text-xs font-extrabold text-[color:var(--athkar)] px-2 tabular-nums">
-                  {arabicMonthYear(new Date(selectedDate))}
+                  {arabicMonthYear(parseIsoDateString(selectedDate))}
                 </span>
                 <button
                   type="button"
                   onClick={() => {
-                    const cur = new Date(selectedDate);
+                    const cur = parseIsoDateString(selectedDate);
                     cur.setMonth(cur.getMonth() + 1, 1);
                     setSelectedDate(isoDate(cur));
                   }}

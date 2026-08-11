@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, togglePrayerStatus, type PrayerLog } from "@/lib/db";
-import { isoDate, formatArabicDate, formatArabicDateFull, weekDays, AR_WEEKDAYS, arabicMonthYear } from "@/lib/date-utils";
+import { isoDate, formatArabicDate, formatArabicDateFull, weekDays, AR_WEEKDAYS, arabicMonthYear, parseIsoDateString } from "@/lib/date-utils";
 import { Check, X, Sparkles, ChevronRight, ChevronLeft, Sun, Moon, Sunrise, Sunset, Clock, Calendar } from "lucide-react";
 
 export const Route = createFileRoute("/prayers")({
@@ -30,7 +30,7 @@ function PrayersPage() {
   );
 
   // Month logs for calendar navigation
-  const currentDateObj = new Date(selectedDate);
+  const currentDateObj = parseIsoDateString(selectedDate);
   const year = currentDateObj.getFullYear();
   const month = currentDateObj.getMonth();
   const monthStart = isoDate(new Date(year, month, 1));
@@ -64,7 +64,7 @@ function PrayersPage() {
   };
 
   const navigateMonth = (dir: -1 | 1) => {
-    const cur = new Date(selectedDate);
+    const cur = parseIsoDateString(selectedDate);
     cur.setMonth(cur.getMonth() + dir, 1);
     setSelectedDate(isoDate(cur));
   };
@@ -222,7 +222,7 @@ function PrayersPage() {
             <div className="flex items-center gap-2 mb-1">
               <Calendar className="h-4.5 w-4.5 text-emerald-600" />
               <span className="text-sm font-black text-emerald-950 bg-emerald-100/90 px-3 py-1 rounded-xl border border-emerald-300/80 shadow-2xs">
-                {formatArabicDateFull(new Date(selectedDate))}
+                {formatArabicDateFull(parseIsoDateString(selectedDate))}
               </span>
               {selectedDate === today && (
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-emerald-600 text-white">

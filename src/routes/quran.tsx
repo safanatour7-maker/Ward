@@ -2,7 +2,7 @@ import { createFileRoute, Link, Outlet, useLocation } from "@tanstack/react-rout
 import { useLiveQuery } from "dexie-react-hooks";
 import { useState, useEffect } from "react";
 import { db } from "@/lib/db";
-import { isoDate, startOfWeek, formatArabicDate } from "@/lib/date-utils";
+import { isoDate, startOfWeek, formatArabicDate, parseIsoDateString } from "@/lib/date-utils";
 import { autoCloudSync } from "@/lib/cloud-sync";
 import { MonthCalendar } from "@/components/MonthCalendar";
 import { SurahPicker } from "@/components/SurahPicker";
@@ -148,7 +148,7 @@ function QuranScreen() {
       <header className="mb-4 flex items-center justify-between px-1">
         <div>
           <h1 className="text-2xl font-extrabold text-foreground">
-            {selectedDate === isoDate() ? "الورد القرآني" : `إنجازك في يوم: ${formatArabicDate(new Date(selectedDate))}`}
+            {selectedDate === isoDate() ? "الورد القرآني" : `إنجازك في يوم: ${formatArabicDate(parseIsoDateString(selectedDate))}`}
           </h1>
           <p className="text-xs text-muted-foreground mt-1.5 italic font-medium leading-relaxed bg-[color:var(--quran)]/5 py-1.5 px-3 rounded-xl border-r-3 border-[color:var(--quran)]">
             "يارب ما أقرب ما يتقرب به إليك المتقربون؟ بكلامي ، بفهم وبغير فهم.."
@@ -173,7 +173,7 @@ function QuranScreen() {
       <section className="mt-5">
         <div className="mb-2 flex items-center justify-between px-1">
           <h2 className="text-base font-bold text-foreground">
-            {selectedDate === isoDate() ? "سور هذا اليوم" : `سور يوم ${formatArabicDate(new Date(selectedDate))}`}
+            {selectedDate === isoDate() ? "سور هذا اليوم" : `سور يوم ${formatArabicDate(parseIsoDateString(selectedDate))}`}
           </h2>
           <button
             onClick={() => setPickerMode({ mode: "add" })}

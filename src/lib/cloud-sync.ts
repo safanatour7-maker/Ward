@@ -34,6 +34,29 @@ export async function pushLocalToCloudDirect(userId: string): Promise<boolean> {
     const dailyQuranSelection = await db.daily_quran_selection.toArray();
     const prayerLogs = await db.prayer_logs.toArray();
 
+    // SAFETY GUARD: Never overwrite non-empty cloud data with an empty local dataset
+    const isLocalEmpty =
+      thikrProgress.length === 0 &&
+      customHabitProgress.length === 0 &&
+      quranDailyReading.length === 0 &&
+      prayerLogs.length === 0;
+
+    if (isLocalEmpty) {
+      const existingSnap = await getDoc(doc(dbFirestore, "user_data", userId)).catch(() => null);
+      if (existingSnap && existingSnap.exists()) {
+        const exData = existingSnap.data();
+        if (
+          (exData.prayerLogs && exData.prayerLogs.length > 0) ||
+          (exData.thikrProgress && exData.thikrProgress.length > 0) ||
+          (exData.customHabitProgress && exData.customHabitProgress.length > 0) ||
+          (exData.quranDailyReading && exData.quranDailyReading.length > 0)
+        ) {
+          console.warn("Prevented overwriting non-empty cloud data with empty local state.");
+          return false;
+        }
+      }
+    }
+
     const dataPayload = {
       thikrItems,
       thikrGroups,
@@ -204,21 +227,43 @@ function mergeQuranDailyReadingList(local: QuranDailyReading[], cloud: QuranDail
 function mergeQuranSurahStateList(local: QuranSurahState[], cloud: QuranSurahState[]): QuranSurahState[] {
   const map = new Map<number, QuranSurahState>();
   cloud.forEach((p) => {
-    if (p.surah_id) map.set(p.surah_id, { ...p });
+    if (p.surah_id) {
+      map.set(p.surah_id, { ...p });
+    }
   });
   local.forEach((p) => {
     if (!p.surah_id) return;
     const existing = map.get(p.surah_id);
     if (existing) {
-      map.set(p.surah_id, {
-        ...existing,
-        ...p,
-        max_page_reached: Math.max(existing.max_page_reached || 0, p.max_page_reached || 0),
-        current_page: Math.max(existing.current_page || 0, p.current_page || 0),
-        percent_complete: Math.max(existing.percent_complete || 0, p.percent_complete || 0),
-      });
+      existing.max_page_reached = Math.max(existing.max_page_reached || 0, p.max_page_reached || 0);
+      existing.current_page = Math.max(existing.current_page || 0, p.current_page || 0);
+      existing.percent_complete = Math.max(existing.percent_complete || 0, p.percent_complete || 0);
     } else {
       map.set(p.surah_id, { ...p });
+    }
+  });
+  return Array.from(map.values());
+}
+
+function mergeDailyQuranSelectionList(local: DailyQuranSelection[], cloud: DailyQuranSelection[]): DailyQuranSelection[] {
+  const map = new Map<string, DailyQuranSelection>();
+  cloud.forEach((p) => {
+    if (p.date) {
+      const copy = { ...p };
+      delete copy.id;
+      map.set(p.date, copy);
+    }
+  });
+  local.forEach((p) => {
+    if (!p.date) return;
+    const existing = map.get(p.date);
+    if (existing) {
+      const combinedSurahIds = Array.from(new Set([...(existing.surah_ids || []), ...(p.surah_ids || [])]));
+      existing.surah_ids = combinedSurahIds;
+    } else {
+      const copy = { ...p };
+      delete copy.id;
+      map.set(p.date, copy);
     }
   });
   return Array.from(map.values());
@@ -261,27 +306,87 @@ export async function pullCloudToLocal(userId: string): Promise<boolean> {
   if (!db || !userId) return false;
 
   try {
-    // Check user_data collection
-    let snapshot = await getDoc(doc(dbFirestore, "user_data", userId)).catch(() => null);
+    // 1. Build list of candidate doc IDs to inspect
+    const candidateIds: string[] = [userId];
 
-    if (!snapshot || !snapshot.exists()) {
-      const userDocRef = doc(dbFirestore, "users", userId, "appData", "main");
-      snapshot = await getDoc(userDocRef).catch(() => null);
+    let userEmail = "";
+    if (typeof window !== "undefined") {
+      const savedSession = localStorage.getItem("app_account_session");
+      if (savedSession) {
+        try {
+          const parsed = JSON.parse(savedSession);
+          if (parsed?.email) userEmail = parsed.email;
+        } catch (e) {}
+      }
     }
 
-    if (!snapshot || !snapshot.exists()) {
-      // First time user on cloud: upload existing local data
-      await pushLocalToCloudDirect(userId);
+    if (userEmail) {
+      const accDocId = "acc_" + userEmail.trim().toLowerCase().replace(/[^a-zA-Z0-9]/g, "_");
+      if (!candidateIds.includes(accDocId)) {
+        candidateIds.push(accDocId);
+      }
+    }
+
+    // 2. Fetch candidates and pick candidate document with richest data set
+    let bestDocData: any = null;
+    let maxRecordCount = -1;
+
+    for (const candId of candidateIds) {
+      // Check user_data/candId
+      const snap1 = await getDoc(doc(dbFirestore, "user_data", candId)).catch(() => null);
+      if (snap1 && snap1.exists()) {
+        const d = snap1.data();
+        if (d) {
+          const count =
+            (Array.isArray(d.prayerLogs) ? d.prayerLogs.length : 0) +
+            (Array.isArray(d.thikrProgress) ? d.thikrProgress.length : 0) +
+            (Array.isArray(d.customHabitProgress) ? d.customHabitProgress.length : 0) +
+            (Array.isArray(d.quranDailyReading) ? d.quranDailyReading.length : 0) +
+            (Array.isArray(d.customHabits) ? d.customHabits.length : 0) +
+            (Array.isArray(d.thikrItems) ? d.thikrItems.length : 0);
+          if (count > maxRecordCount) {
+            maxRecordCount = count;
+            bestDocData = d;
+          }
+        }
+      }
+
+      // Check users/candId/appData/main
+      const snap2 = await getDoc(doc(dbFirestore, "users", candId, "appData", "main")).catch(() => null);
+      if (snap2 && snap2.exists()) {
+        const d = snap2.data();
+        if (d) {
+          const count =
+            (Array.isArray(d.prayerLogs) ? d.prayerLogs.length : 0) +
+            (Array.isArray(d.thikrProgress) ? d.thikrProgress.length : 0) +
+            (Array.isArray(d.customHabitProgress) ? d.customHabitProgress.length : 0) +
+            (Array.isArray(d.quranDailyReading) ? d.quranDailyReading.length : 0) +
+            (Array.isArray(d.customHabits) ? d.customHabits.length : 0) +
+            (Array.isArray(d.thikrItems) ? d.thikrItems.length : 0);
+          if (count > maxRecordCount) {
+            maxRecordCount = count;
+            bestDocData = d;
+          }
+        }
+      }
+    }
+
+    if (!bestDocData) {
+      // First time user on cloud with zero existing remote documents
+      // Only push if local database actually has records
+      const localPrayerLogs = await db.prayer_logs.count();
+      const localThikrProgress = await db.thikr_progress.count();
+      const localHabitProgress = await db.custom_habit_progress.count();
+      if (localPrayerLogs > 0 || localThikrProgress > 0 || localHabitProgress > 0) {
+        await pushLocalToCloudDirect(userId);
+      }
       return false;
     }
 
-    const rawData = snapshot.data();
-    if (!rawData) return false;
-
-    let parsed = rawData;
-    if (rawData.data && typeof rawData.data === "string") {
+    let parsed = bestDocData;
+    if (bestDocData.data && typeof bestDocData.data === "string") {
       try {
-        parsed = JSON.parse(rawData.data);
+        parsed = JSON.parse(bestDocData.data);
       } catch (e) {}
     }
 
@@ -304,7 +409,7 @@ export async function pullCloudToLocal(userId: string): Promise<boolean> {
     const mergedThikrItems = mergeGenericItems<ThikrItem>(localThikrItems, Array.isArray(parsed.thikrItems) ? parsed.thikrItems : []);
     const mergedThikrGroups = mergeGenericItems<ThikrGroup>(localThikrGroups, Array.isArray(parsed.thikrGroups) ? parsed.thikrGroups : []);
     const mergedCustomHabits = mergeGenericItems<CustomHabit>(localCustomHabits, Array.isArray(parsed.customHabits) ? parsed.customHabits : []);
-    const mergedDailyQuranSelection = mergeGenericItems<DailyQuranSelection>(localDailyQuranSelection, Array.isArray(parsed.dailyQuranSelection) ? parsed.dailyQuranSelection : []);
+    const mergedDailyQuranSelection = mergeDailyQuranSelectionList(localDailyQuranSelection, Array.isArray(parsed.dailyQuranSelection) ? parsed.dailyQuranSelection : []);
 
     // Safely write merged data into Dexie
     await db.transaction("rw", [
