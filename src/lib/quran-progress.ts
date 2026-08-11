@@ -66,11 +66,20 @@ export async function dayFillRatio(dateIso: string, fallbackSurahIds?: number[])
   return Math.max(0, Math.min(1, readToday / totalPages));
 }
 
-/** Get a specific day's selection strictly for that date. */
+/** Get a specific day's selection for that date (falling back to most recent selection). */
 export async function getDailySelection(dateStr: string): Promise<number[]> {
   const found = await db.daily_quran_selection.where("date").equals(dateStr).first();
-  if (found && found.surah_ids && Array.isArray(found.surah_ids)) {
+  if (found && found.surah_ids && Array.isArray(found.surah_ids) && found.surah_ids.length > 0) {
     return found.surah_ids;
+  }
+  // Fall back to most recent selection on or before dateStr
+  const recent = await db.daily_quran_selection
+    .where("date")
+    .below(dateStr)
+    .reverse()
+    .first();
+  if (recent && recent.surah_ids && Array.isArray(recent.surah_ids)) {
+    return recent.surah_ids;
   }
   return [];
 }

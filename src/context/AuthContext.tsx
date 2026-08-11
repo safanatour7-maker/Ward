@@ -94,19 +94,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return unsubscribe;
   }, []);
 
-  // 2. Periodic background auto-sync every 8 seconds if user is logged in
+  // 2. Periodic background auto-sync every 3 minutes if user is logged in
   useEffect(() => {
     if (!currentUser || !currentUser.uid) return;
 
     const interval = setInterval(() => {
-      pushLocalToCloud(currentUser.uid).then(() => {
-        setLastSyncedAt(new Date().toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" }));
-      });
-    }, 8000);
+      pushLocalToCloud(currentUser.uid)
+        .then(() => {
+          setLastSyncedAt(new Date().toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" }));
+        })
+        .catch(() => {});
+    }, 180000);
 
     const handleVisibility = () => {
       if (document.visibilityState === "hidden") {
-        pushLocalToCloud(currentUser.uid);
+        pushLocalToCloud(currentUser.uid).catch(() => {});
       }
     };
     window.addEventListener("visibilitychange", handleVisibility);

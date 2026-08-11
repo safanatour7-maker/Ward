@@ -63,15 +63,34 @@ export function weekDays(d: Date = new Date()): string[] {
   });
 }
 
+export function parseIsoDateString(input: Date | string = new Date()): Date {
+  if (input instanceof Date) return input;
+  if (typeof input === "string") {
+    const cleanStr = input.trim().split("T")[0];
+    const parts = cleanStr.split("-");
+    if (parts.length === 3) {
+      const y = parseInt(parts[0], 10);
+      const m = parseInt(parts[1], 10) - 1;
+      const d = parseInt(parts[2], 10);
+      if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+        return new Date(y, m, d);
+      }
+    }
+  }
+  return new Date(input);
+}
+
 export function formatArabicDate(input: Date | string = new Date()): string {
-  const d = typeof input === "string" ? new Date(input) : input;
+  const d = parseIsoDateString(input);
   if (isNaN(d.getTime())) return typeof input === "string" ? input : "";
   const wd = AR_WEEKDAYS[d.getDay()];
   const m = AR_MONTHS[d.getMonth()];
   return `${wd}، ${d.getDate()} ${m}`;
 }
 
-export function formatArabicDateFull(d: Date = new Date()): string {
+export function formatArabicDateFull(input: Date | string = new Date()): string {
+  const d = parseIsoDateString(input);
+  if (isNaN(d.getTime())) return typeof input === "string" ? input : "";
   const wd = AR_WEEKDAYS[d.getDay()];
   const m = AR_MONTHS[d.getMonth()];
   return `${wd}، ${d.getDate()} ${m} ${d.getFullYear()}`;

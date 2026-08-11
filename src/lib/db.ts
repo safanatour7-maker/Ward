@@ -231,17 +231,6 @@ export async function ensureSeed() {
     const { WISDOM_QUOTES } = await import("./wisdom-seed");
     await db.wisdom_quotes.bulkAdd(WISDOM_QUOTES);
   }
-
-  // One-time cleanup of previously pre-seeded default Athkar to give the user a clean slate
-  if (typeof window !== "undefined") {
-    const cleanKey = "cleaned_preseeded_athkar_v5";
-    if (!localStorage.getItem(cleanKey)) {
-      await db.thikr_items.clear();
-      await db.thikr_groups.clear();
-      await db.thikr_progress.clear();
-      localStorage.setItem(cleanKey, "true");
-    }
-  }
 }
 
 export async function getPrayerLogForDate(dateStr: string): Promise<PrayerLog> {

@@ -213,39 +213,8 @@ function parseLocalDate(dateStr: string): Date {
 }
 
 export function isHabitActiveOnDate(h: CustomHabit, dateStr: string): boolean {
-  const startStr = h.start_date || h.created_at?.slice(0, 10) || isoDate();
-  
-  if (h.duration_type === "lifetime") {
-    return true;
-  }
-
-  if (h.duration_type === "once") {
-    return startStr === dateStr;
-  }
-
-  if (h.duration_type === "week") {
-    // Active only during the calendar week of start_date
-    const startW = isoDate(startOfWeek(parseLocalDate(startStr)));
-    const targetW = isoDate(startOfWeek(parseLocalDate(dateStr)));
-    return startW === targetW;
-  }
-  
-  if (h.duration_type === "month") {
-    // Active for 30 days starting from start_date
-    const startT = parseLocalDate(startStr).getTime();
-    const targetT = parseLocalDate(dateStr).getTime();
-    const diffDays = Math.floor((targetT - startT) / (1000 * 60 * 60 * 24));
-    return diffDays >= 0 && diffDays < 30;
-  }
-  
-  if (h.duration_type === "custom") {
-    // Active for duration_days starting from start_date
-    const startT = parseLocalDate(startStr).getTime();
-    const targetT = parseLocalDate(dateStr).getTime();
-    const diffDays = Math.floor((targetT - startT) / (1000 * 60 * 60 * 24));
-    return diffDays >= 0 && diffDays < h.duration_days;
-  }
-  
+  if (h.status === "archived") return false;
+  // All active habits remain active and visible across past and present dates
   return true;
 }
 

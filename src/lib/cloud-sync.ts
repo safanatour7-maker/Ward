@@ -1,9 +1,27 @@
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { dbFirestore } from "./firebase";
-import { db } from "./db";
+import {
+  db,
+  type PrayerLog,
+  type ThikrProgress,
+  type CustomHabitProgress,
+  type QuranDailyReading,
+  type QuranSurahState,
+  type ThikrItem,
+  type ThikrGroup,
+  type CustomHabit,
+  type DailyQuranSelection
+} from "./db";
 
-export async function pushLocalToCloud(userId: string): Promise<boolean> {
+let quotaExceededCooldownUntil = 0;
+let syncDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+export async function pushLocalToCloudDirect(userId: string): Promise<boolean> {
   if (!db || !userId) return false;
+
+  if (Date.now() < quotaExceededCooldownUntil) {
+    return false;
+  }
 
   try {
     const thikrItems = await db.thikr_items.toArray();
@@ -29,17 +47,11 @@ export async function pushLocalToCloud(userId: string): Promise<boolean> {
       updatedAt: new Date().toISOString(),
     };
 
-    const userDocRef = doc(dbFirestore, "users", userId, "appData", "main");
-    await setDoc(userDocRef, {
-      data: JSON.stringify(dataPayload),
-      updatedAt: new Date().toISOString(),
-    }, { merge: true });
-
-    // Also write directly to user_data collection for instant admin dashboard retrieval
+    // Primary write: user_data document for user
     const userDataRef = doc(dbFirestore, "user_data", userId);
     await setDoc(userDataRef, dataPayload, { merge: true });
 
-    // Check if session has email to sync to account doc ID as well
+    // Secondary write if account ID differs
     const savedSession = typeof window !== "undefined" ? localStorage.getItem("app_account_session") : null;
     if (savedSession) {
       try {
@@ -49,41 +61,252 @@ export async function pushLocalToCloud(userId: string): Promise<boolean> {
           const accDocId = "acc_" + cleanEmail.replace(/[^a-zA-Z0-9]/g, "_");
           if (accDocId !== userId) {
             await setDoc(doc(dbFirestore, "user_data", accDocId), dataPayload, { merge: true }).catch(() => {});
-            await setDoc(doc(dbFirestore, "users", accDocId, "appData", "main"), {
-              data: JSON.stringify(dataPayload),
-              updatedAt: new Date().toISOString(),
-            }, { merge: true }).catch(() => {});
           }
         }
       } catch (e) {}
     }
 
     return true;
-  } catch (error) {
-    console.error("Failed to push local data to cloud:", error);
+  } catch (error: any) {
+    const errStr = String(error?.message || error || "");
+    if (errStr.includes("resource-exhausted") || errStr.includes("Quota limit exceeded") || errStr.includes("quota")) {
+      console.warn("Firestore daily quota limit reached. Application will continue saving data locally on device.");
+      quotaExceededCooldownUntil = Date.now() + 60 * 60 * 1000; // 1 hour cooldown
+    } else {
+      console.error("Failed to push local data to cloud:", error);
+    }
     return false;
   }
+}
+
+export function pushLocalToCloud(userId: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (Date.now() < quotaExceededCooldownUntil) {
+      resolve(false);
+      return;
+    }
+    if (syncDebounceTimer) {
+      clearTimeout(syncDebounceTimer);
+    }
+    // 2s debounce to avoid quota exhaust on rapid taps
+    syncDebounceTimer = setTimeout(async () => {
+      const res = await pushLocalToCloudDirect(userId);
+      resolve(res);
+    }, 2000);
+  });
+}
+
+/**
+ * Helper merger functions to combine local and cloud records without ever wiping local unsynced progress.
+ */
+
+function mergePrayerLogsList(local: PrayerLog[], cloud: PrayerLog[]): PrayerLog[] {
+  const map = new Map<string, PrayerLog>();
+  cloud.forEach((p) => {
+    if (p.date) {
+      const copy = { ...p };
+      delete copy.id;
+      map.set(p.date, copy);
+    }
+  });
+  local.forEach((p) => {
+    if (!p.date) return;
+    const existing = map.get(p.date);
+    if (existing) {
+      existing.fajr = existing.fajr || p.fajr;
+      existing.dhuhr = existing.dhuhr || p.dhuhr;
+      existing.asr = existing.asr || p.asr;
+      existing.maghrib = existing.maghrib || p.maghrib;
+      existing.isha = existing.isha || p.isha;
+    } else {
+      const copy = { ...p };
+      delete copy.id;
+      map.set(p.date, copy);
+    }
+  });
+  return Array.from(map.values());
+}
+
+function mergeThikrProgressList(local: ThikrProgress[], cloud: ThikrProgress[]): ThikrProgress[] {
+  const map = new Map<string, ThikrProgress>();
+  cloud.forEach((p) => {
+    if (p.thikr_item_id && p.date) {
+      const copy = { ...p };
+      delete copy.id;
+      map.set(`${p.thikr_item_id}_${p.date}`, copy);
+    }
+  });
+  local.forEach((p) => {
+    if (!p.thikr_item_id || !p.date) return;
+    const key = `${p.thikr_item_id}_${p.date}`;
+    const existing = map.get(key);
+    if (existing) {
+      existing.completed = existing.completed || p.completed;
+      existing.current_count = Math.max(existing.current_count || 0, p.current_count || 0);
+    } else {
+      const copy = { ...p };
+      delete copy.id;
+      map.set(key, copy);
+    }
+  });
+  return Array.from(map.values());
+}
+
+function mergeCustomHabitProgressList(local: CustomHabitProgress[], cloud: CustomHabitProgress[]): CustomHabitProgress[] {
+  const map = new Map<string, CustomHabitProgress>();
+  cloud.forEach((p) => {
+    if (p.habit_id && p.date) {
+      const copy = { ...p };
+      delete copy.id;
+      map.set(`${p.habit_id}_${p.date}`, copy);
+    }
+  });
+  local.forEach((p) => {
+    if (!p.habit_id || !p.date) return;
+    const key = `${p.habit_id}_${p.date}`;
+    const existing = map.get(key);
+    if (existing) {
+      existing.completed = existing.completed || p.completed;
+      existing.count = Math.max(existing.count || 0, p.count || 0);
+    } else {
+      const copy = { ...p };
+      delete copy.id;
+      map.set(key, copy);
+    }
+  });
+  return Array.from(map.values());
+}
+
+function mergeQuranDailyReadingList(local: QuranDailyReading[], cloud: QuranDailyReading[]): QuranDailyReading[] {
+  const map = new Map<string, QuranDailyReading>();
+  cloud.forEach((p) => {
+    if (p.surah_id && p.date) {
+      const copy = { ...p };
+      delete copy.id;
+      map.set(`${p.surah_id}_${p.date}`, copy);
+    }
+  });
+  local.forEach((p) => {
+    if (!p.surah_id || !p.date) return;
+    const key = `${p.surah_id}_${p.date}`;
+    const existing = map.get(key);
+    if (existing) {
+      existing.pages_read = Math.max(existing.pages_read || 0, p.pages_read || 0);
+    } else {
+      const copy = { ...p };
+      delete copy.id;
+      map.set(key, copy);
+    }
+  });
+  return Array.from(map.values());
+}
+
+function mergeQuranSurahStateList(local: QuranSurahState[], cloud: QuranSurahState[]): QuranSurahState[] {
+  const map = new Map<number, QuranSurahState>();
+  cloud.forEach((p) => {
+    if (p.surah_id) map.set(p.surah_id, { ...p });
+  });
+  local.forEach((p) => {
+    if (!p.surah_id) return;
+    const existing = map.get(p.surah_id);
+    if (existing) {
+      map.set(p.surah_id, {
+        ...existing,
+        ...p,
+        max_page_reached: Math.max(existing.max_page_reached || 0, p.max_page_reached || 0),
+        current_page: Math.max(existing.current_page || 0, p.current_page || 0),
+        percent_complete: Math.max(existing.percent_complete || 0, p.percent_complete || 0),
+      });
+    } else {
+      map.set(p.surah_id, { ...p });
+    }
+  });
+  return Array.from(map.values());
+}
+
+function mergeGenericItems<T extends { id?: number; global_id?: string; name?: string }>(local: T[], cloud: T[]): T[] {
+  const cloudByGlobalId = new Map<string, T>();
+  const cloudByName = new Map<string, T>();
+
+  const resultList: T[] = [];
+
+  cloud.forEach((item) => {
+    const copy = { ...item };
+    delete copy.id;
+    if (copy.global_id) cloudByGlobalId.set(copy.global_id, copy);
+    if (copy.name) cloudByName.set(copy.name.trim().toLowerCase(), copy);
+    resultList.push(copy);
+  });
+
+  local.forEach((localItem) => {
+    const matched =
+      (localItem.global_id ? cloudByGlobalId.get(localItem.global_id) : null) ||
+      (localItem.name ? cloudByName.get(localItem.name.trim().toLowerCase()) : null);
+
+    if (!matched) {
+      const copy = { ...localItem };
+      delete copy.id;
+      resultList.push(copy);
+    } else {
+      const copy = { ...localItem };
+      delete copy.id;
+      Object.assign(matched, copy);
+    }
+  });
+
+  return resultList;
 }
 
 export async function pullCloudToLocal(userId: string): Promise<boolean> {
   if (!db || !userId) return false;
 
   try {
-    const userDocRef = doc(dbFirestore, "users", userId, "appData", "main");
-    const snapshot = await getDoc(userDocRef);
+    // Check user_data collection
+    let snapshot = await getDoc(doc(dbFirestore, "user_data", userId)).catch(() => null);
 
-    if (!snapshot.exists()) {
-      // First time user on cloud: upload existing local data to cloud
-      await pushLocalToCloud(userId);
+    if (!snapshot || !snapshot.exists()) {
+      const userDocRef = doc(dbFirestore, "users", userId, "appData", "main");
+      snapshot = await getDoc(userDocRef).catch(() => null);
+    }
+
+    if (!snapshot || !snapshot.exists()) {
+      // First time user on cloud: upload existing local data
+      await pushLocalToCloudDirect(userId);
       return false;
     }
 
     const rawData = snapshot.data();
-    if (!rawData || !rawData.data) return false;
+    if (!rawData) return false;
 
-    const parsed = JSON.parse(rawData.data);
+    let parsed = rawData;
+    if (rawData.data && typeof rawData.data === "string") {
+      try {
+        parsed = JSON.parse(rawData.data);
+      } catch (e) {}
+    }
 
-    // Apply cloud data into local Dexie database
+    // Read current local state from Dexie to perform smart union merge
+    const localThikrItems = await db.thikr_items.toArray();
+    const localThikrGroups = await db.thikr_groups.toArray();
+    const localThikrProgress = await db.thikr_progress.toArray();
+    const localCustomHabits = await db.custom_habits.toArray();
+    const localCustomHabitProgress = await db.custom_habit_progress.toArray();
+    const localQuranDailyReading = await db.quran_daily_reading.toArray();
+    const localQuranSurahState = await db.quran_surah_state.toArray();
+    const localDailyQuranSelection = await db.daily_quran_selection.toArray();
+    const localPrayerLogs = await db.prayer_logs.toArray();
+
+    const mergedPrayerLogs = mergePrayerLogsList(localPrayerLogs, Array.isArray(parsed.prayerLogs) ? parsed.prayerLogs : []);
+    const mergedThikrProgress = mergeThikrProgressList(localThikrProgress, Array.isArray(parsed.thikrProgress) ? parsed.thikrProgress : []);
+    const mergedCustomHabitProgress = mergeCustomHabitProgressList(localCustomHabitProgress, Array.isArray(parsed.customHabitProgress) ? parsed.customHabitProgress : []);
+    const mergedQuranDailyReading = mergeQuranDailyReadingList(localQuranDailyReading, Array.isArray(parsed.quranDailyReading) ? parsed.quranDailyReading : []);
+    const mergedQuranSurahState = mergeQuranSurahStateList(localQuranSurahState, Array.isArray(parsed.quranSurahState) ? parsed.quranSurahState : []);
+    const mergedThikrItems = mergeGenericItems<ThikrItem>(localThikrItems, Array.isArray(parsed.thikrItems) ? parsed.thikrItems : []);
+    const mergedThikrGroups = mergeGenericItems<ThikrGroup>(localThikrGroups, Array.isArray(parsed.thikrGroups) ? parsed.thikrGroups : []);
+    const mergedCustomHabits = mergeGenericItems<CustomHabit>(localCustomHabits, Array.isArray(parsed.customHabits) ? parsed.customHabits : []);
+    const mergedDailyQuranSelection = mergeGenericItems<DailyQuranSelection>(localDailyQuranSelection, Array.isArray(parsed.dailyQuranSelection) ? parsed.dailyQuranSelection : []);
+
+    // Safely write merged data into Dexie
     await db.transaction("rw", [
       db.thikr_items,
       db.thikr_groups,
@@ -95,46 +318,39 @@ export async function pullCloudToLocal(userId: string): Promise<boolean> {
       db.daily_quran_selection,
       db.prayer_logs,
     ], async () => {
-      if (Array.isArray(parsed.thikrItems)) {
-        await db.thikr_items.clear();
-        await db.thikr_items.bulkAdd(parsed.thikrItems);
-      }
-      if (Array.isArray(parsed.thikrGroups)) {
-        await db.thikr_groups.clear();
-        await db.thikr_groups.bulkAdd(parsed.thikrGroups);
-      }
-      if (Array.isArray(parsed.thikrProgress)) {
-        await db.thikr_progress.clear();
-        await db.thikr_progress.bulkAdd(parsed.thikrProgress);
-      }
-      if (Array.isArray(parsed.customHabits)) {
-        await db.custom_habits.clear();
-        await db.custom_habits.bulkAdd(parsed.customHabits);
-      }
-      if (Array.isArray(parsed.customHabitProgress)) {
-        await db.custom_habit_progress.clear();
-        await db.custom_habit_progress.bulkAdd(parsed.customHabitProgress);
-      }
-      if (Array.isArray(parsed.quranDailyReading)) {
-        await db.quran_daily_reading.clear();
-        await db.quran_daily_reading.bulkAdd(parsed.quranDailyReading);
-      }
-      if (Array.isArray(parsed.quranSurahState)) {
-        await db.quran_surah_state.clear();
-        await db.quran_surah_state.bulkAdd(parsed.quranSurahState);
-      }
-      if (Array.isArray(parsed.dailyQuranSelection)) {
-        await db.daily_quran_selection.clear();
-        await db.daily_quran_selection.bulkAdd(parsed.dailyQuranSelection);
-      }
-      if (Array.isArray(parsed.prayerLogs)) {
-        await db.prayer_logs.clear();
-        await db.prayer_logs.bulkAdd(parsed.prayerLogs);
-      }
+      await db.thikr_items.clear();
+      await db.thikr_items.bulkAdd(mergedThikrItems);
+
+      await db.thikr_groups.clear();
+      await db.thikr_groups.bulkAdd(mergedThikrGroups);
+
+      await db.thikr_progress.clear();
+      await db.thikr_progress.bulkAdd(mergedThikrProgress);
+
+      await db.custom_habits.clear();
+      await db.custom_habits.bulkAdd(mergedCustomHabits);
+
+      await db.custom_habit_progress.clear();
+      await db.custom_habit_progress.bulkAdd(mergedCustomHabitProgress);
+
+      await db.quran_daily_reading.clear();
+      await db.quran_daily_reading.bulkAdd(mergedQuranDailyReading);
+
+      await db.quran_surah_state.clear();
+      await db.quran_surah_state.bulkAdd(mergedQuranSurahState);
+
+      await db.daily_quran_selection.clear();
+      await db.daily_quran_selection.bulkAdd(mergedDailyQuranSelection);
+
+      await db.prayer_logs.clear();
+      await db.prayer_logs.bulkAdd(mergedPrayerLogs);
     });
 
+    // Push merged state back to cloud so cloud gets any local additions
+    pushLocalToCloudDirect(userId).catch(() => {});
+
     return true;
-  } catch (error) {
+  } catch (error: any) {
     console.error("Failed to pull cloud data to local:", error);
     return false;
   }
@@ -142,6 +358,7 @@ export async function pullCloudToLocal(userId: string): Promise<boolean> {
 
 export function autoCloudSync(): void {
   if (typeof window === "undefined") return;
+  if (Date.now() < quotaExceededCooldownUntil) return;
   const savedSession = localStorage.getItem("app_account_session");
   if (!savedSession) return;
   try {
@@ -151,3 +368,21 @@ export function autoCloudSync(): void {
     }
   } catch (e) {}
 }
+
+// Global pagehide / visibilitychange listener to ensure immediate sync on tab close
+if (typeof window !== "undefined") {
+  const handlePageHide = () => {
+    const savedSession = localStorage.getItem("app_account_session");
+    if (savedSession) {
+      try {
+        const parsed = JSON.parse(savedSession);
+        if (parsed?.uid) {
+          pushLocalToCloudDirect(parsed.uid).catch(() => {});
+        }
+      } catch (e) {}
+    }
+  };
+  window.addEventListener("pagehide", handlePageHide);
+  window.addEventListener("beforeunload", handlePageHide);
+}
+

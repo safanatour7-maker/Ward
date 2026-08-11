@@ -170,26 +170,12 @@ async function loadSingleMemberCloudData(m: UserProfileDoc): Promise<UserCloudDa
       let snap2 = await getDoc(doc(dbFirestore, "user_data", accDocId)).catch(() => null);
       if (snap2 && snap2.exists()) return snap2.data() as UserCloudData;
     }
-
-    // 3. Check users/uid/appData/main
-    let snap3 = await getDoc(doc(dbFirestore, "users", m.uid, "appData", "main")).catch(() => null);
-    if (snap3 && snap3.exists() && snap3.data()?.data) {
-      try {
-        return JSON.parse(snap3.data().data) as UserCloudData;
-      } catch (e) {}
+  } catch (e: any) {
+    if (String(e?.message || e).includes("resource-exhausted")) {
+      console.warn("Firestore quota limit reached while loading member data.");
+    } else {
+      console.error("Error loading member cloud data:", e);
     }
-
-    // 4. Check users/accDocId/appData/main
-    if (accDocId !== m.uid) {
-      let snap4 = await getDoc(doc(dbFirestore, "users", accDocId, "appData", "main")).catch(() => null);
-      if (snap4 && snap4.exists() && snap4.data()?.data) {
-        try {
-          return JSON.parse(snap4.data().data) as UserCloudData;
-        } catch (e) {}
-      }
-    }
-  } catch (e) {
-    console.error("Error loading member cloud data:", e);
   }
 
   return null;
@@ -296,22 +282,23 @@ function getUniqueSubmissionDates(
   ascending: boolean = true
 ): string[] {
   const dates = new Set<string>();
-  dates.add(isoDate());
+  const todayStr = isoDate();
+  dates.add(todayStr);
 
   members.forEach((m) => {
     const uData = getUserDataForMember(m, userDataMap);
     if (!uData) return;
     if (uData.prayerLogs && Array.isArray(uData.prayerLogs)) {
-      uData.prayerLogs.forEach((p: any) => p.date && dates.add(p.date));
+      uData.prayerLogs.forEach((p: any) => p.date && p.date <= todayStr && dates.add(p.date));
     }
     if (uData.thikrProgress && Array.isArray(uData.thikrProgress)) {
-      uData.thikrProgress.forEach((t: any) => t.date && dates.add(t.date));
+      uData.thikrProgress.forEach((t: any) => t.date && t.date <= todayStr && dates.add(t.date));
     }
     if (uData.customHabitProgress && Array.isArray(uData.customHabitProgress)) {
-      uData.customHabitProgress.forEach((h: any) => h.date && dates.add(h.date));
+      uData.customHabitProgress.forEach((h: any) => h.date && h.date <= todayStr && dates.add(h.date));
     }
     if (uData.quranDailyReading && Array.isArray(uData.quranDailyReading)) {
-      uData.quranDailyReading.forEach((q: any) => q.date && dates.add(q.date));
+      uData.quranDailyReading.forEach((q: any) => q.date && q.date <= todayStr && dates.add(q.date));
     }
   });
 
@@ -594,13 +581,19 @@ function AdminPage() {
       setMembers(list);
       setLoadingMembers(false);
 
-      // Fetch member cloud data for each member
-      list.forEach((m) => {
-        loadSingleMemberCloudData(m).then((data) => {
-          if (data) {
-            setUserDataMap((prev) => ({ ...prev, [m.uid]: data }));
-          }
-        });
+      // Members list loaded; user_data listener handles live progress updates automatically
+      setUserDataMap((prevMap) => {
+        const missing = list.filter((m) => !prevMap[m.uid]);
+        if (missing.length > 0) {
+          missing.forEach((m) => {
+            loadSingleMemberCloudData(m).then((data) => {
+              if (data) {
+                setUserDataMap((p) => ({ ...p, [m.uid]: data }));
+              }
+            });
+          });
+        }
+        return prevMap;
       });
     }, (err) => {
       console.error("Error subscribing to users collection:", err);
@@ -953,11 +946,8 @@ function AdminPage() {
             <span className="grid h-8 w-8 place-items-center rounded-xl bg-amber-100 text-amber-800 font-extrabold">
               <ShieldCheck className="h-5 w-5" />
             </span>
-            <h1 className="text-2xl font-extrabold text-slate-900">لوحة تحكّم المدير والمدرب</h1>
+            <h1 className="text-2xl font-extrabold text-slate-900">لوحة التحكم</h1>
           </div>
-          <p className="text-xs text-slate-500 font-medium mt-1">
-            متابعة الأعضاء، نشر الأخلاق العامة مباشرة، وتصدير التقارير الأسبوعية بملفات Excel.
-          </p>
         </div>
 
         <div className="flex items-center gap-2">
@@ -993,9 +983,9 @@ function AdminPage() {
           </div>
           <button
             type="button"
-            className="px-2 py-0.5 rounded-md bg-amber-100 hover:bg-amber-200 text-amber-950 text-[11px] font-bold transition-all flex items-center gap-1 border border-amber-300/50"
+            className="px-2.5 py-0.5 rounded-md bg-amber-100 hover:bg-amber-200 text-amber-950 text-xs font-black transition-all flex items-center gap-1 border border-amber-300/50"
           >
-            <span>{showHabitForm ? "إخفاء ✖" : "+ إضافة خُلُق"}</span>
+            <span>{showHabitForm ? "إخفاء ✖" : "+"}</span>
             {showHabitForm ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
           </button>
         </div>
@@ -1144,9 +1134,9 @@ function AdminPage() {
           </div>
           <button
             type="button"
-            className="px-2 py-0.5 rounded-md bg-indigo-100 hover:bg-indigo-200 text-indigo-950 text-[11px] font-bold transition-all flex items-center gap-1 border border-indigo-300/50"
+            className="px-2.5 py-0.5 rounded-md bg-indigo-100 hover:bg-indigo-200 text-indigo-950 text-xs font-black transition-all flex items-center gap-1 border border-indigo-300/50"
           >
-            <span>{showThikrForm ? "إخفاء ✖" : "+ إضافة ذِكر"}</span>
+            <span>{showThikrForm ? "إخفاء ✖" : "+"}</span>
             {showThikrForm ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
           </button>
         </div>
